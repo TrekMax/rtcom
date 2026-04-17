@@ -11,6 +11,12 @@ use rtcom_core::{
 };
 
 /// Parsed `rtcom` command-line invocation.
+///
+/// `struct_excessive_bools` is allowed because each boolean here maps
+/// 1-to-1 to a CLI flag the user expects to type (`--no-reset`,
+/// `--echo`, `--lower-dtr`, ...). Collapsing into enums or state
+/// objects would just make the call site harder to read.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Parser, Debug, Clone)]
 #[command(
     name = "rtcom",
@@ -96,6 +102,28 @@ pub struct Cli {
         value_name = "RULE",
     )]
     pub emap: CliLineEnding,
+
+    /// Deassert DTR immediately after opening the device (picocom
+    /// `--lower-dtr`). Useful for boards that wire DTR to reset/boot
+    /// pins — keeps the MCU from rebooting when rtcom opens the port.
+    #[arg(long, conflicts_with = "raise_dtr")]
+    pub lower_dtr: bool,
+
+    /// Assert DTR immediately after opening the device (picocom
+    /// `--raise-dtr`). Mostly useful when a previous session left
+    /// DTR low and you want to put it back.
+    #[arg(long, conflicts_with = "lower_dtr")]
+    pub raise_dtr: bool,
+
+    /// Deassert RTS immediately after opening the device (picocom
+    /// `--lower-rts`). Same MCU-reset rationale as `--lower-dtr`.
+    #[arg(long, conflicts_with = "raise_rts")]
+    pub lower_rts: bool,
+
+    /// Assert RTS immediately after opening the device (picocom
+    /// `--raise-rts`).
+    #[arg(long, conflicts_with = "lower_rts")]
+    pub raise_rts: bool,
 
     /// Do not toggle DTR on startup (suppress the MCU-reset pulse).
     #[arg(long = "no-reset")]
@@ -409,6 +437,64 @@ mod tests {
         assert!(Cli::try_parse_from(["rtcom", "/dev/x", "--escape", ""]).is_err());
         assert!(Cli::try_parse_from(["rtcom", "/dev/x", "--escape", "abc"]).is_err());
         assert!(Cli::try_parse_from(["rtcom", "/dev/x", "--escape", "^!"]).is_err());
+    }
+
+    #[test]
+    fn line_control_flags_default_to_false() {
+        let cli = Cli::parse_from(["rtcom", "/dev/x"]);
+        assert!(!cli.lower_dtr);
+        assert!(!cli.raise_dtr);
+        assert!(!cli.lower_rts);
+        assert!(!cli.raise_rts);
+    }
+
+    #[test]
+    fn lower_dtr_parses_alone() {
+        let cli = Cli::parse_from(["rtcom", "/dev/x", "--lower-dtr"]);
+        assert!(cli.lower_dtr);
+        assert!(!cli.raise_dtr);
+    }
+
+    #[test]
+    fn raise_dtr_parses_alone() {
+        let cli = Cli::parse_from(["rtcom", "/dev/x", "--raise-dtr"]);
+        assert!(cli.raise_dtr);
+        assert!(!cli.lower_dtr);
+    }
+
+    #[test]
+    fn lower_rts_parses_alone() {
+        let cli = Cli::parse_from(["rtcom", "/dev/x", "--lower-rts"]);
+        assert!(cli.lower_rts);
+        assert!(!cli.raise_rts);
+    }
+
+    #[test]
+    fn raise_rts_parses_alone() {
+        let cli = Cli::parse_from(["rtcom", "/dev/x", "--raise-rts"]);
+        assert!(cli.raise_rts);
+        assert!(!cli.lower_rts);
+    }
+
+    #[test]
+    fn lower_dtr_and_raise_dtr_are_mutually_exclusive() {
+        let res = Cli::try_parse_from(["rtcom", "/dev/x", "--lower-dtr", "--raise-dtr"]);
+        assert!(res.is_err(), "expected clap to reject the conflict");
+    }
+
+    #[test]
+    fn lower_rts_and_raise_rts_are_mutually_exclusive() {
+        let res = Cli::try_parse_from(["rtcom", "/dev/x", "--lower-rts", "--raise-rts"]);
+        assert!(res.is_err(), "expected clap to reject the conflict");
+    }
+
+    #[test]
+    fn lower_dtr_does_not_conflict_with_lower_rts() {
+        // Crossing the DTR/RTS axes is the canonical
+        // `--lower-dtr --lower-rts` invocation. Must remain valid.
+        let cli = Cli::parse_from(["rtcom", "/dev/x", "--lower-dtr", "--lower-rts"]);
+        assert!(cli.lower_dtr);
+        assert!(cli.lower_rts);
     }
 
     #[test]
