@@ -21,6 +21,7 @@
 //! on as additional bus subscribers.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use bytes::Bytes;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -28,12 +29,37 @@ use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 
 use crate::command::Command;
+use crate::config::{Parity, StopBits};
 use crate::device::SerialDevice;
 use crate::event::{Event, EventBus};
+
+const fn parity_letter(p: Parity) -> char {
+    match p {
+        Parity::None => 'N',
+        Parity::Even => 'E',
+        Parity::Odd => 'O',
+        Parity::Mark => 'M',
+        Parity::Space => 'S',
+    }
+}
+
+const fn stop_bits_number(s: StopBits) -> u8 {
+    match s {
+        StopBits::One => 1,
+        StopBits::Two => 2,
+    }
+}
 
 /// Read buffer size. 4 KiB matches the typical USB-serial driver burst
 /// granularity; larger buffers waste memory, smaller ones fragment events.
 const READ_BUFFER_BYTES: usize = 4096;
+
+/// Duration of the line break asserted by the `SendBreak` command.
+const SEND_BREAK_DURATION: Duration = Duration::from_millis(250);
+
+/// Static cheatsheet text for `Command::Help`.
+const HELP_TEXT: &str = "commands: ?/h help, q/x quit, c show config, t toggle DTR, \
+                         g toggle RTS, b<rate><Enter> set baud, \\ send break";
 
 /// Owns a serial device and a bus, and runs the I/O + command loop.
 ///
@@ -44,6 +70,12 @@ pub struct Session<D: SerialDevice + 'static> {
     device: D,
     bus: EventBus,
     cancel: CancellationToken,
+    /// Tracked DTR state. Initialised to `true` because `SerialDevice`
+    /// gives no way to query the line, and most backends open with DTR
+    /// asserted; the first toggle therefore deasserts.
+    dtr_asserted: bool,
+    /// Tracked RTS state. See `dtr_asserted` for the rationale.
+    rts_asserted: bool,
 }
 
 impl<D: SerialDevice + 'static> Session<D> {
@@ -54,6 +86,8 @@ impl<D: SerialDevice + 'static> Session<D> {
             device,
             bus: EventBus::default(),
             cancel: CancellationToken::new(),
+            dtr_asserted: true,
+            rts_asserted: true,
         }
     }
 
@@ -66,6 +100,8 @@ impl<D: SerialDevice + 'static> Session<D> {
             device,
             bus,
             cancel: CancellationToken::new(),
+            dtr_asserted: true,
+            rts_asserted: true,
         }
     }
 
@@ -160,6 +196,20 @@ impl<D: SerialDevice + 'static> Session<D> {
     fn dispatch_command(&mut self, cmd: Command) {
         match cmd {
             Command::Quit => self.cancel.cancel(),
+            Command::Help => {
+                self.bus.publish(Event::SystemMessage(HELP_TEXT.into()));
+            }
+            Command::ShowConfig => {
+                let cfg = self.device.config();
+                self.bus.publish(Event::SystemMessage(format!(
+                    "config: {} {}{}{} flow={:?}",
+                    cfg.baud_rate,
+                    cfg.data_bits.bits(),
+                    parity_letter(cfg.parity),
+                    stop_bits_number(cfg.stop_bits),
+                    cfg.flow_control,
+                )));
+            }
             Command::SetBaud(rate) => match self.device.set_baud_rate(rate) {
                 Ok(()) => {
                     self.bus
@@ -169,15 +219,47 @@ impl<D: SerialDevice + 'static> Session<D> {
                     self.bus.publish(Event::Error(Arc::new(err)));
                 }
             },
-            // Remaining handlers (Help, ShowConfig, ToggleDtr/Rts,
-            // SendBreak) land in the next TDD cycle. Listed explicitly
-            // (no wildcard) so adding a new Command variant forces a
-            // visible compile error here.
-            Command::Help
-            | Command::ShowConfig
-            | Command::ToggleDtr
-            | Command::ToggleRts
-            | Command::SendBreak => {}
+            Command::ToggleDtr => {
+                let new_state = !self.dtr_asserted;
+                match self.device.set_dtr(new_state) {
+                    Ok(()) => {
+                        self.dtr_asserted = new_state;
+                        self.bus.publish(Event::SystemMessage(format!(
+                            "DTR: {}",
+                            if new_state { "asserted" } else { "deasserted" }
+                        )));
+                    }
+                    Err(err) => {
+                        self.bus.publish(Event::Error(Arc::new(err)));
+                    }
+                }
+            }
+            Command::ToggleRts => {
+                let new_state = !self.rts_asserted;
+                match self.device.set_rts(new_state) {
+                    Ok(()) => {
+                        self.rts_asserted = new_state;
+                        self.bus.publish(Event::SystemMessage(format!(
+                            "RTS: {}",
+                            if new_state { "asserted" } else { "deasserted" }
+                        )));
+                    }
+                    Err(err) => {
+                        self.bus.publish(Event::Error(Arc::new(err)));
+                    }
+                }
+            }
+            Command::SendBreak => match self.device.send_break(SEND_BREAK_DURATION) {
+                Ok(()) => {
+                    self.bus.publish(Event::SystemMessage(format!(
+                        "sent {} ms break",
+                        SEND_BREAK_DURATION.as_millis()
+                    )));
+                }
+                Err(err) => {
+                    self.bus.publish(Event::Error(Arc::new(err)));
+                }
+            },
         }
     }
 }

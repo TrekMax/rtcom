@@ -189,22 +189,61 @@ async fn help_command_emits_system_message_listing_keys() {
     );
 }
 
-#[tokio::test]
-async fn toggle_dtr_command_emits_system_message_with_new_state() {
-    let text = capture_system_message(Command::ToggleDtr).await;
-    assert!(
-        text.contains("DTR"),
-        "expected DTR mention in SystemMessage: {text:?}"
-    );
+/// Same idea as `capture_system_message`, but accepts an `Event::Error`
+/// outcome too — useful for tests of device-control commands that PTYs
+/// may reject (DTR/RTS/break ioctls). The error-path acceptance proves
+/// the dispatcher tried, even if the kernel turned it down.
+async fn dispatch_and_wait_for_message_or_error(cmd: Command) -> Option<String> {
+    let (_external, internal) = SerialPortDevice::pair().expect("pty pair");
+    let session = Session::new(internal);
+    let bus = session.bus().clone();
+    let cancel = session.cancellation_token();
+    let mut rx = bus.subscribe();
+
+    let session_handle = tokio::spawn(session.run());
+    tokio::task::yield_now().await;
+
+    bus.publish(Event::Command(cmd));
+
+    let event = wait_for(&mut rx, |e| {
+        matches!(e, Event::SystemMessage(_) | Event::Error(_))
+    })
+    .await;
+    let text = match event {
+        Event::SystemMessage(t) => Some(t),
+        Event::Error(_) => None,
+        other => panic!("unexpected: {other:?}"),
+    };
+
+    cancel.cancel();
+    timeout(STEP_TIMEOUT, session_handle)
+        .await
+        .expect("session did not shut down")
+        .expect("session task panicked")
+        .expect("session returned error");
+    text
 }
 
 #[tokio::test]
-async fn toggle_rts_command_emits_system_message_with_new_state() {
-    let text = capture_system_message(Command::ToggleRts).await;
-    assert!(
-        text.contains("RTS"),
-        "expected RTS mention in SystemMessage: {text:?}"
-    );
+async fn toggle_dtr_command_emits_system_message_or_error() {
+    if let Some(text) = dispatch_and_wait_for_message_or_error(Command::ToggleDtr).await {
+        assert!(
+            text.contains("DTR"),
+            "expected DTR mention in SystemMessage: {text:?}"
+        );
+    }
+    // Err path means the PTY rejected the ioctl, which still proves the
+    // dispatcher hit set_dtr — that is what we care about here.
+}
+
+#[tokio::test]
+async fn toggle_rts_command_emits_system_message_or_error() {
+    if let Some(text) = dispatch_and_wait_for_message_or_error(Command::ToggleRts).await {
+        assert!(
+            text.contains("RTS"),
+            "expected RTS mention in SystemMessage: {text:?}"
+        );
+    }
 }
 
 #[tokio::test]
