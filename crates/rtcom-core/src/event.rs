@@ -53,6 +53,13 @@ pub enum Event {
     },
     /// The serial configuration changed at runtime (e.g. `^T b 9600`).
     ConfigChanged(SerialConfig),
+    /// Human-readable status text emitted by the session itself
+    /// (Help banner, `ShowConfig`, line-toggle acknowledgements, ...).
+    /// The terminal renderer renders these with a `*** rtcom: ` prefix
+    /// to keep them distinct from serial data; log writers
+    /// (Issue #10) must drop them so they do not pollute capture
+    /// files.
+    SystemMessage(String),
     /// A non-fatal error worth surfacing to subscribers. Wrapped in `Arc`
     /// so the broadcast channel can clone it cheaply across receivers.
     Error(Arc<Error>),
@@ -126,6 +133,17 @@ mod tests {
     async fn publish_with_no_subscribers_returns_zero() {
         let bus = EventBus::new(8);
         assert_eq!(bus.publish(Event::DeviceConnected), 0);
+    }
+
+    #[tokio::test]
+    async fn system_message_round_trips() {
+        let bus = EventBus::new(8);
+        let mut rx = bus.subscribe();
+        bus.publish(Event::SystemMessage("hello".into()));
+        match rx.recv().await.unwrap() {
+            Event::SystemMessage(text) => assert_eq!(text, "hello"),
+            other => panic!("unexpected event: {other:?}"),
+        }
     }
 
     #[tokio::test]
