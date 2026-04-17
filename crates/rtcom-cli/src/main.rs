@@ -9,6 +9,7 @@
 #![forbid(unsafe_code)]
 
 mod args;
+mod signal;
 mod stdin;
 mod tty;
 
