@@ -6,8 +6,10 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description = "Command-line interface for rtcom (Rust Terminal Communication)."
+description = "Command-line interface for rtcom (Rust Terminal Communication): a modern picocom/tio alternative."
 readme = "../../README.md"
+keywords = ["serial", "terminal", "uart", "picocom", "tio"]
+categories = ["command-line-utilities", "embedded", "hardware-support"]
 
 [[bin]]
 name = "rtcom"

@@ -8,6 +8,8 @@ repository.workspace = true
 authors.workspace = true
 description = "Core library for rtcom (Rust Terminal Communication): serial device abstraction, event bus, and session orchestration."
 readme = "../../README.md"
+keywords = ["serial", "terminal", "uart", "embedded", "async"]
+categories = ["asynchronous", "embedded", "hardware-support"]
 
 [lints]
 workspace = true
