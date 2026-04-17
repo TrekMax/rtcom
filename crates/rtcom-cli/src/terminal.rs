@@ -14,11 +14,9 @@
 //! - Other events are ignored — diagnostics flow through `tracing`,
 //!   not the terminal stream.
 //!
-//! Stub: only the public API is in place; behaviour lands in the green
-//! commit.
-
-use rtcom_core::EventBus;
-use tokio::io::AsyncWrite;
+use rtcom_core::Event;
+use tokio::io::{AsyncWrite, AsyncWriteExt};
+use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 
 /// Prefix the renderer prepends to every [`Event::SystemMessage`].
@@ -27,16 +25,52 @@ pub const SYSTEM_PREFIX: &str = "*** rtcom: ";
 
 /// Drives the renderer until either the cancellation token trips or
 /// the bus closes (no senders left).
-#[allow(
-    dead_code,
-    clippy::unused_async,
-    reason = "wired into main in the next commit; tests cover it now"
-)]
-pub async fn run_terminal_renderer<W>(_bus: EventBus, _cancel: CancellationToken, _writer: W)
-where
+///
+/// The caller is responsible for `bus.subscribe()`-ing before any
+/// events that should reach this renderer are published. Subscribing
+/// here would race with the spawn site — broadcast channels do not
+/// replay messages sent before a subscriber attaches.
+#[allow(dead_code, reason = "wired into main in the next commit")]
+pub async fn run_terminal_renderer<W>(
+    mut rx: broadcast::Receiver<Event>,
+    cancel: CancellationToken,
+    mut writer: W,
+) where
     W: AsyncWrite + Unpin + Send + 'static,
 {
-    todo!("run_terminal_renderer — implementation lands in the green commit")
+    loop {
+        tokio::select! {
+            biased;
+            () = cancel.cancelled() => break,
+            msg = rx.recv() => match msg {
+                Ok(Event::RxBytes(bytes)) => {
+                    if writer.write_all(&bytes).await.is_err() {
+                        break;
+                    }
+                    // Flush so the bytes reach the user immediately;
+                    // serial terminals are typically interactive and
+                    // line buffering would mask incoming chunks.
+                    let _ = writer.flush().await;
+                }
+                Ok(Event::SystemMessage(text)) => {
+                    if writer.write_all(SYSTEM_PREFIX.as_bytes()).await.is_err() {
+                        break;
+                    }
+                    if writer.write_all(text.as_bytes()).await.is_err() {
+                        break;
+                    }
+                    if writer.write_all(b"\n").await.is_err() {
+                        break;
+                    }
+                    let _ = writer.flush().await;
+                }
+                // Diagnostics flow through tracing; the wire stream is
+                // for serial bytes + system messages only.
+                Ok(_) | Err(broadcast::error::RecvError::Lagged(_)) => {}
+                Err(broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -44,7 +78,7 @@ mod tests {
     use std::time::Duration;
 
     use bytes::Bytes;
-    use rtcom_core::Event;
+    use rtcom_core::{Event, EventBus};
     use tokio::io::{duplex, AsyncReadExt};
     use tokio::time::timeout;
 
@@ -53,7 +87,8 @@ mod tests {
     const STEP: Duration = Duration::from_millis(500);
 
     /// Helper: spin up a renderer wired to a fresh duplex pipe.
-    /// Returns the cancel handle and the read side of the pipe.
+    /// Subscribes synchronously *before* spawning the task so any
+    /// `publish()` the test makes immediately afterwards is observed.
     fn launch() -> (
         EventBus,
         CancellationToken,
@@ -62,8 +97,9 @@ mod tests {
     ) {
         let bus = EventBus::default();
         let cancel = CancellationToken::new();
+        let rx = bus.subscribe();
         let (writer, reader) = duplex(1024);
-        let task = tokio::spawn(run_terminal_renderer(bus.clone(), cancel.clone(), writer));
+        let task = tokio::spawn(run_terminal_renderer(rx, cancel.clone(), writer));
         (bus, cancel, task, reader)
     }
 
