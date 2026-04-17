@@ -62,24 +62,26 @@ impl UucpLock {
         #[cfg(not(unix))]
         {
             let _ = device_path;
-            return Ok(Self {
+            Ok(Self {
                 path: PathBuf::new(),
                 active: false,
-            });
+            })
         }
         #[cfg(unix)]
-        match Self::acquire_in(device_path, Path::new(PRIMARY_LOCK_DIR)) {
-            Ok(lock) => Ok(lock),
-            Err(crate::Error::Io(err)) if can_fallback(&err) => {
-                tracing::warn!(
-                    primary = PRIMARY_LOCK_DIR,
-                    fallback = FALLBACK_LOCK_DIR,
-                    error = %err,
-                    "UUCP lock falling back to per-user directory",
-                );
-                Self::acquire_in(device_path, Path::new(FALLBACK_LOCK_DIR))
+        {
+            match Self::acquire_in(device_path, Path::new(PRIMARY_LOCK_DIR)) {
+                Ok(lock) => Ok(lock),
+                Err(crate::Error::Io(err)) if can_fallback(&err) => {
+                    tracing::warn!(
+                        primary = PRIMARY_LOCK_DIR,
+                        fallback = FALLBACK_LOCK_DIR,
+                        error = %err,
+                        "UUCP lock falling back to per-user directory",
+                    );
+                    Self::acquire_in(device_path, Path::new(FALLBACK_LOCK_DIR))
+                }
+                Err(other) => Err(other),
             }
-            Err(other) => Err(other),
         }
     }
 
@@ -95,10 +97,10 @@ impl UucpLock {
     pub fn acquire_in(device_path: &str, lock_dir: &Path) -> Result<Self> {
         #[cfg(not(unix))]
         {
-            return Ok(Self {
+            Ok(Self {
                 path: PathBuf::new(),
                 active: false,
-            });
+            })
         }
         #[cfg(unix)]
         {
@@ -165,6 +167,7 @@ impl Drop for UucpLock {
 
 /// Returns the basename of `path` (the part after the last `/`), or the
 /// whole string if no separator is present.
+#[cfg(unix)]
 fn basename_of(path: &str) -> &str {
     path.rsplit('/').next().unwrap_or(path)
 }
