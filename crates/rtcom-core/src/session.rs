@@ -1,5 +1,8 @@
-//! Session orchestrator: bridges a [`SerialDevice`](crate::SerialDevice)
-//! with the [`EventBus`].
+//! Session orchestrator: bridges a [`SerialDevice`] with the
+//! [`EventBus`].
+//!
+//! [`SerialDevice`]: crate::SerialDevice
+//! [`EventBus`]: crate::EventBus
 //!
 //! At v0.1 a [`Session`] runs a single task that multiplexes the serial
 //! device, the cancellation token, and the bus subscription via

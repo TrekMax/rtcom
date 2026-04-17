@@ -1,6 +1,6 @@
 //! Terminal renderer task.
 //!
-//! Subscribes to the [`EventBus`] and writes user-visible output to a
+//! Subscribes to the `EventBus` and writes user-visible output to a
 //! generic [`AsyncWrite`] sink (stdout in production, an in-memory pipe
 //! in tests):
 //!

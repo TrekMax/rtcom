@@ -9,7 +9,7 @@
 //!    CI shells need byte-mode reads for `run_stdin_reader`).
 //! 4. Build a tokio runtime and:
 //!    - install [`signal::SignalListener`] against the session's
-//!      [`CancellationToken`];
+//!      cancellation token;
 //!    - open the device, build a [`Session`] with omap/imap from the
 //!      CLI, spawn the run loop;
 //!    - spawn [`stdin::run_stdin_reader`] feeding the session's bus;
