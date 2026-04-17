@@ -312,7 +312,7 @@ mod tests {
         assert!(!cli.echo);
         assert!(!cli.quiet);
         assert_eq!(cli.verbose, 0);
-        assert_eq!(cli.escape, 0x14); // ^T
+        assert_eq!(cli.escape, 0x01); // ^A
     }
 
     #[test]
