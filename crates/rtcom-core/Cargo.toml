@@ -1,0 +1,24 @@
+[package]
+name = "rtcom-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Core library for rtcom (Rust Terminal Communication): serial device abstraction, event bus, and session orchestration."
+readme = "../../README.md"
+
+[lints]
+workspace = true
+
+[dependencies]
+bytes = { workspace = true }
+serialport = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tokio-serial = { workspace = true }
+tokio-util = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
