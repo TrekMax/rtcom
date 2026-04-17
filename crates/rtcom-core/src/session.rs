@@ -135,6 +135,27 @@ impl<D: SerialDevice + 'static> Session<D> {
         self
     }
 
+    /// Tells the session what the DTR line's actual state is on the
+    /// device. Use this when the caller has already issued a
+    /// `set_dtr` (e.g. main applying `--lower-dtr` right after
+    /// opening the port) so the cached state stays honest and the
+    /// first `Command::ToggleDtr` produces the right transition.
+    ///
+    /// Defaults to `true` (asserted) — the typical OS state at open.
+    #[must_use]
+    pub const fn with_initial_dtr(mut self, asserted: bool) -> Self {
+        self.dtr_asserted = asserted;
+        self
+    }
+
+    /// Tells the session what the RTS line's actual state is. See
+    /// [`with_initial_dtr`](Self::with_initial_dtr) for the rationale.
+    #[must_use]
+    pub const fn with_initial_rts(mut self, asserted: bool) -> Self {
+        self.rts_asserted = asserted;
+        self
+    }
+
     /// Returns a reference to the bus. Clone it before calling
     /// [`Session::run`] (which consumes `self`) if you need to publish or
     /// subscribe from outside the session.
