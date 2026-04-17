@@ -1,0 +1,225 @@
+.\" Manpage for rtcom.
+.\" Keep this file in sync with Cli (crates/rtcom-cli/src/args.rs) and
+.\" CommandKeyParser (crates/rtcom-core/src/command.rs). The CI
+.\" will not catch divergence; reviewers please compare.
+.TH RTCOM 1 "2026-04-17" "rtcom 0.1.0" "User Commands"
+.
+.SH NAME
+rtcom \- Rust Terminal Communication, a modern serial terminal
+.
+.SH SYNOPSIS
+.B rtcom
+.RI [ OPTIONS ]
+.I DEVICE
+.
+.SH DESCRIPTION
+.B rtcom
+opens
+.IR DEVICE
+(typically
+.IR /dev/ttyUSB0 ,
+.IR /dev/ttyACM0 ,
+or
+.IR COM3
+on Windows) as a serial port and bridges it to the terminal. Bytes
+typed on stdin are sent to the device; bytes received from the device
+are written to stdout. An interactive command-key prefix
+.RB ( ^T
+by default) gives access to runtime controls without leaving the
+session.
+.PP
+The program enables terminal raw mode when stdin is a TTY and
+restores it on every exit path (clean exit, panic, SIGINT / SIGTERM /
+SIGHUP). A UUCP-style lock file in
+.I /var/lock
+(falling back to
+.IR /tmp )
+prevents two
+.B rtcom
+instances from racing the same device.
+.
+.SH OPTIONS
+.TP
+.BR \-b ", " \-\-baud " " \fIRATE\fR
+Baud rate in bits per second. Default: 115200.
+.TP
+.BR \-d ", " \-\-databits " " \fI{5|6|7|8}\fR
+Data bits per frame. Default: 8.
+.TP
+.BR \-s ", " \-\-stopbits " " \fI{1|2}\fR
+Stop bits per frame. Default: 1.
+.TP
+.BR \-p ", " \-\-parity " " \fI{none|even|odd|mark|space}\fR
+Parity mode. Default: none. Mark / space are silently treated as none
+on platforms that do not implement them.
+.TP
+.BR \-f ", " \-\-flow " " \fI{none|hw|sw}\fR
+Flow control. Default: none. `hw` is RTS/CTS, `sw` is XON/XOFF.
+.TP
+.B \-\-omap " " \fI{none|crlf|lfcr|igncr|ignlf}\fR
+Outbound line-ending rule (applied to every byte sent to the device).
+Names follow picocom:
+.I crlf
+maps LF to CRLF,
+.I lfcr
+maps CR to CRLF,
+.I igncr
+drops CR,
+.I ignlf
+drops LF. Default:
+.IR none .
+.TP
+.B \-\-imap " " \fI{none|crlf|lfcr|igncr|ignlf}\fR
+Inbound line-ending rule (applied to every byte received from the
+device before it reaches stdout). Same grammar as
+.BR \-\-omap .
+.TP
+.B \-\-emap " " \fI{none|crlf|lfcr|igncr|ignlf}\fR
+Echo-side line-ending rule. Accepted for parity with picocom; the
+local-echo path itself wires up in a later release.
+.TP
+.B \-\-no-reset
+Do not toggle DTR on startup. Useful when the microcontroller uses
+DTR as its reset line and you do not want to reboot it merely by
+opening the port.
+.TP
+.B \-\-echo
+Locally echo keystrokes to stdout as they are sent. Off by default.
+.TP
+.B \-\-escape " " \fICHAR\fR
+Override the command key. Accepts a single literal character or
+caret notation
+.RI ( ^T ,
+.IR ^A ,
+...). Default:
+.IR ^T .
+.TP
+.BR \-q ", " \-\-quiet
+Suppress the startup configuration banner on stderr.
+.TP
+.BR \-v ", " \-\-verbose
+Increase diagnostic verbosity. Repeatable:
+.BR \-v " " = " info" ,
+.BR \-vv " " = " debug" ,
+.BR \-vvv " " = " trace" .
+.BR RUST_LOG " (if set)"
+takes precedence over
+.BR \-v .
+.TP
+.BR \-h ", " \-\-help
+Print help and exit.
+.TP
+.BR \-V ", " \-\-version
+Print version and exit.
+.
+.SH COMMAND KEYS
+After typing the escape key
+.RB ( ^T
+by default), the next byte is matched against this table. Unknown
+keys silently return to normal mode.
+.TP
+.BR ? " | " h
+Print the command-key cheatsheet as a system message (prefixed
+.BR "*** rtcom: " ).
+.TP
+.BR q " | " x
+Quit the session cleanly. Exit code
+.BR 0 .
+.TP
+.B c
+Show the current serial configuration as a system message.
+.TP
+.B t
+Toggle DTR. The new state is reported as
+.BR "DTR: asserted" " or " "DTR: deasserted" .
+.TP
+.B g
+Toggle RTS. Same reporting as DTR.
+.TP
+.B \e
+Send a 250 ms line break.
+.TP
+.BI b rate <Enter>
+Change baud rate. Digits after
+.B b
+accumulate until
+.B <Enter>
+(CR or LF) commits them. Empty or non-numeric input cancels.
+.B Esc
+in the digit-collection state also cancels.
+.TP
+.B ^T
+Send the escape byte itself to the wire. Useful when the configured
+escape key collides with a byte the remote expects.
+.TP
+.B Esc
+Cancel command mode without doing anything.
+.
+.SH EXIT STATUS
+.TP
+.B 0
+The session completed cleanly (user pressed
+.B ^Tq
+or the device hit EOF).
+.TP
+.B 1
+A startup error prevented the session from running (invalid device
+path, UUCP lock contention, failure to allocate the tokio runtime,
+\&...) .
+.TP
+.BR 128+ N
+The session was terminated by signal
+.IR N .
+SIGHUP -> 129, SIGINT -> 130, SIGTERM -> 143. The RAII drop chain
+(raw mode, lock file, device, bus) is still honoured before exit.
+.
+.SH SIGNALS
+SIGINT, SIGTERM, and SIGHUP trip the session's cancellation token
+and unwind cleanly. SIGWINCH is logged at debug level (the v1.0+ TUI
+will react). On Windows, Ctrl-C and Ctrl-Break are the equivalents.
+.
+.SH ENVIRONMENT
+.TP
+.B RUST_LOG
+Overrides the
+.BR \-v -derived
+default tracing filter. Accepts the usual
+.BR tracing-subscriber ( env_filter )
+grammar, e.g.
+.BR rtcom_cli=debug,rtcom_core=info .
+.
+.SH FILES
+.TP
+.I /var/lock/LCK..<basename>
+UUCP-style lock file created for the duration of a session. Falls
+back to
+.I /tmp/LCK..<basename>
+if
+.I /var/lock
+is not writable (user not in group
+.IR lock ,
+minimal container, etc.). Content is a 10-character ASCII PID plus
+newline. Stale locks (PIDs that no longer exist) are transparently
+replaced.
+.
+.SH EXAMPLES
+.TP
+Open a USB-serial dongle at 115200 8N1 (defaults):
+.B rtcom /dev/ttyUSB0
+.TP
+Unix-style Linux host talking to a legacy peer that expects CRLF:
+.B rtcom /dev/ttyUSB0 \-\-omap crlf \-\-imap igncr
+.TP
+Non-reset mode for a board with a DTR-as-reset wiring:
+.B rtcom /dev/ttyACM0 \-\-no-reset
+.
+.SH SEE ALSO
+.BR picocom (1),
+.BR tio (1),
+.BR socat (1),
+.BR stty (1)
+.
+.SH AUTHOR
+TrekMax and contributors. See the project at
+.UR https://github.com/TrekMax/rtcom
+.UE .
