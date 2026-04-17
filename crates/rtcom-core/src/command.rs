@@ -4,7 +4,11 @@
 //! by the next commit in the TDD cycle.
 
 /// One actionable command produced by [`CommandKeyParser`].
-#[derive(Clone, Debug, PartialEq, Eq)]
+///
+/// `Copy` because every variant carries only `Copy` data (currently a
+/// single `u32` for `SetBaud`). Passing by value is therefore cheap and
+/// matches how the dispatcher consumes the value via `match`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Command {
     /// Show the help / command-key cheatsheet.
     Help,

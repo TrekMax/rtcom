@@ -20,11 +20,14 @@
 //! Later issues plug in mappers (Issue #8), logging, scripting, and so
 //! on as additional bus subscribers.
 
+use std::sync::Arc;
+
 use bytes::Bytes;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 
+use crate::command::Command;
 use crate::device::SerialDevice;
 use crate::event::{Event, EventBus};
 
@@ -135,7 +138,7 @@ impl<D: SerialDevice + 'static> Session<D> {
                             break;
                         }
                     }
-                    // Command dispatch lands in the next commits (issue #7).
+                    Ok(Event::Command(cmd)) => self.dispatch_command(cmd),
                     // Lagged: we missed some events but can resume.
                     // Other event variants are not the loop's concern.
                     Ok(_) | Err(broadcast::error::RecvError::Lagged(_)) => {}
@@ -145,5 +148,36 @@ impl<D: SerialDevice + 'static> Session<D> {
             }
         }
         Ok(())
+    }
+
+    /// Apply a [`Command`] to the device and bus.
+    ///
+    /// Commands that mutate the device run synchronously here; success
+    /// emits [`Event::ConfigChanged`] (when applicable), failure emits
+    /// [`Event::Error`]. The caller (the `Session::run` loop) does not
+    /// need to await anything: every operation either completes
+    /// immediately or is fire-and-forget.
+    fn dispatch_command(&mut self, cmd: Command) {
+        match cmd {
+            Command::Quit => self.cancel.cancel(),
+            Command::SetBaud(rate) => match self.device.set_baud_rate(rate) {
+                Ok(()) => {
+                    self.bus
+                        .publish(Event::ConfigChanged(*self.device.config()));
+                }
+                Err(err) => {
+                    self.bus.publish(Event::Error(Arc::new(err)));
+                }
+            },
+            // Remaining handlers (Help, ShowConfig, ToggleDtr/Rts,
+            // SendBreak) land in the next TDD cycle. Listed explicitly
+            // (no wildcard) so adding a new Command variant forces a
+            // visible compile error here.
+            Command::Help
+            | Command::ShowConfig
+            | Command::ToggleDtr
+            | Command::ToggleRts
+            | Command::SendBreak => {}
+        }
     }
 }
