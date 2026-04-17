@@ -22,6 +22,10 @@ sharing.
   `?`/`h` help, `^Q`/`^X` quit (picocom convention), `c` show config,
   `t`/`g` toggle DTR/RTS, `\` send break, `b<rate><Enter>` change
   baud rate.
+- Picocom-style startup-time modem-line control:
+  `--lower-dtr` / `--raise-dtr` / `--lower-rts` / `--raise-rts`.
+  The classic "open the port without resetting the Arduino-style
+  MCU" recipe is `--lower-dtr --lower-rts`.
 - CR/LF mappers (`--omap` / `--imap` / `--emap`) following picocom's
   `crlf` / `lfcr` / `igncr` / `ignlf` rule names.
 - Clean shutdown on SIGINT / SIGTERM / SIGHUP (termios restored,

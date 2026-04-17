@@ -79,6 +79,28 @@ device before it reaches stdout). Same grammar as
 Echo-side line-ending rule. Accepted for parity with picocom; the
 local-echo path itself wires up in a later release.
 .TP
+.B \-\-lower-dtr
+Deassert DTR immediately after opening the device (picocom
+\fB\-\-lower\-dtr\fR). Use this on Arduino-style boards that wire DTR
+to reset/boot pins to keep the MCU from rebooting when rtcom opens
+the port.
+.TP
+.B \-\-raise-dtr
+Assert DTR immediately after opening the device. Mostly useful when
+a previous session left DTR low and you want to put it back. Mutually
+exclusive with
+.BR \-\-lower\-dtr .
+.TP
+.B \-\-lower-rts
+Deassert RTS immediately after opening the device. Same MCU-reset
+rationale as
+.BR \-\-lower\-dtr .
+.TP
+.B \-\-raise-rts
+Assert RTS immediately after opening the device. Mutually exclusive
+with
+.BR \-\-lower\-rts .
+.TP
 .B \-\-no-reset
 Do not toggle DTR on startup. Useful when the microcontroller uses
 DTR as its reset line and you do not want to reboot it merely by
@@ -225,6 +247,10 @@ Unix-style Linux host talking to a legacy peer that expects CRLF:
 .TP
 Non-reset mode for a board with a DTR-as-reset wiring:
 .B rtcom /dev/ttyACM0 \-\-no-reset
+.TP
+Picocom-equivalent invocation, deasserting both modem control lines
+to keep an Arduino-style MCU from rebooting on open:
+.B rtcom /dev/ttyACM0 \-b 921600 \-\-lower-dtr \-\-lower-rts \-\-imap crlf
 .
 .SH SEE ALSO
 .BR picocom (1),

@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `--lower-dtr` / `--raise-dtr` / `--lower-rts` / `--raise-rts`
+  CLI flags mirroring picocom 1:1. Each lower/raise pair is mutually
+  exclusive at the clap level. The deassert / assert is applied to
+  the device immediately after `open()` and before `Session` takes
+  ownership, and the resulting line state is fed to
+  `Session::with_initial_dtr` / `Session::with_initial_rts` so the
+  cached state stays honest and the first `^A t` / `^A g` toggle
+  produces the right transition. Closes [#1].
+
+[#1]: https://github.com/TrekMax/rtcom/issues/1
+
 ## [0.1.1] — 2026-04-17
 
 A "make the v0.1 release actually publishable" patch. Binary
