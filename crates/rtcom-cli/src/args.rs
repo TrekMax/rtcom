@@ -103,10 +103,12 @@ pub struct Cli {
     pub echo: bool,
 
     /// Command-escape key. Accepts a single char (e.g. `a`) or caret
-    /// notation (`^T`, `^A`, ...). Defaults to `^T`.
+    /// notation (`^A`, `^T`, ...). Defaults to `^A` (Ctrl-A) — picocom's
+    /// historical default; `^T` is intercepted by some terminals
+    /// (tmux's default prefix in some configs, "new tab" in others).
     #[arg(
         long,
-        default_value = "^T",
+        default_value = "^A",
         value_parser = parse_escape,
         value_name = "CHAR",
     )]

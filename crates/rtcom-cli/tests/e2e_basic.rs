@@ -18,8 +18,10 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-/// `^T` — the default escape key used by the parser.
-const ESC: u8 = 0x14;
+/// `^A` — the default escape key used by the binary (matches the
+/// `default_value = "^A"` on `Cli::escape`). Tests rely on the
+/// production default; if it changes here, change it there too.
+const ESC: u8 = 0x01;
 
 const RTCOM_BIN: &str = env!("CARGO_BIN_EXE_rtcom");
 
