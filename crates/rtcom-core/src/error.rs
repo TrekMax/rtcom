@@ -33,4 +33,22 @@ pub enum Error {
     /// e.g. a baud rate of zero.
     #[error("invalid serial configuration: {0}")]
     InvalidConfig(String),
+
+    /// Another live process already owns the device, advertised by a
+    /// UUCP lock file. The error carries enough context to print a
+    /// useful diagnostic.
+    #[error("device {device} is locked by PID {pid} (lock file: {lock_file})")]
+    AlreadyLocked {
+        /// Device path the user asked us to open.
+        device: String,
+        /// PID found in the lock file.
+        pid: i32,
+        /// Path of the lock file we read.
+        lock_file: std::path::PathBuf,
+    },
+
+    /// A UUCP lock file exists but its content cannot be parsed as a
+    /// PID. The lock is treated as stale and removed.
+    #[error("invalid UUCP lock file: {0}")]
+    InvalidLock(String),
 }

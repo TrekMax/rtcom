@@ -32,6 +32,7 @@ pub mod config;
 pub mod device;
 pub mod error;
 pub mod event;
+pub mod lock;
 pub mod mapper;
 pub mod session;
 
@@ -42,5 +43,6 @@ pub use config::{
 pub use device::{SerialDevice, SerialPortDevice};
 pub use error::{Error, Result};
 pub use event::{Event, EventBus, DEFAULT_BUS_CAPACITY};
+pub use lock::UucpLock;
 pub use mapper::{LineEnding, LineEndingMapper, Mapper};
 pub use session::Session;
