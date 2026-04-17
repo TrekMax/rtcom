@@ -1,0 +1,42 @@
+[workspace]
+members = ["crates/*"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+license = "Apache-2.0"
+repository = "https://github.com/TrekMax/rtcom"
+authors = ["TrekMax"]
+
+[workspace.dependencies]
+tokio = { version = "1", features = ["full"] }
+serialport = "4"
+tokio-serial = "5.4"
+tokio-util = { version = "0.7", features = ["rt"] }
+clap = { version = "4.5", features = ["derive", "env"] }
+crossterm = "0.27"
+ctrlc = { version = "3.4", features = ["termination"] }
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+thiserror = "1"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+bytes = "1"
+rtcom-core = { path = "crates/rtcom-core", version = "0.1.0" }
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+missing_docs = "warn"
+
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
