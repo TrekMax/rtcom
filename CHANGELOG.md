@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] — 2026-04-17
+
+A "make the v0.1 release actually publishable" patch. Binary
+behaviour is the same as the late-v0.1.0 development binary that was
+used during the first hardware smoke test; this release pins those
+changes to a properly-tagged version that flows through the new
+GitHub release + crates.io publish pipeline.
+
 ### Infrastructure
 
 - Reworked CI: `fmt` / `clippy` (3-OS matrix) / `test` (3-OS matrix
@@ -145,5 +153,6 @@ use cases.
 - GitHub Actions CI matrix (ubuntu / macos / windows) running fmt,
   clippy `-D warnings`, tests, and `cargo doc -D warnings`.
 
-[Unreleased]: https://github.com/TrekMax/rtcom/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/TrekMax/rtcom/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/TrekMax/rtcom/releases/tag/v0.1.1
 [0.1.0]: https://github.com/TrekMax/rtcom/releases/tag/v0.1.0
