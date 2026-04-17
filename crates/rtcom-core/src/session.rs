@@ -23,7 +23,6 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use bytes::Bytes;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
@@ -182,8 +181,8 @@ impl<D: SerialDevice + 'static> Session<D> {
                         break;
                     }
                     Ok(n) => {
-                        let bytes = Bytes::copy_from_slice(&read_buf[..n]);
-                        self.bus.publish(Event::RxBytes(bytes));
+                        let mapped = self.imap.map(&read_buf[..n]);
+                        self.bus.publish(Event::RxBytes(mapped));
                     }
                     Err(err) => {
                         self.bus.publish(Event::DeviceDisconnected {
@@ -195,7 +194,8 @@ impl<D: SerialDevice + 'static> Session<D> {
 
                 msg = subscriber.recv() => match msg {
                     Ok(Event::TxBytes(bytes)) => {
-                        if let Err(err) = self.device.write_all(&bytes).await {
+                        let mapped = self.omap.map(&bytes);
+                        if let Err(err) = self.device.write_all(&mapped).await {
                             self.bus.publish(Event::DeviceDisconnected {
                                 reason: format!("serial write failed: {err}"),
                             });
