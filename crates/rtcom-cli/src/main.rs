@@ -1,18 +1,26 @@
 //! `rtcom` command-line entry point.
 //!
-//! v0.1 placeholder pipeline:
+//! v0.1 wiring (post-Issue #11):
 //!
-//! 1. Parse args.
-//! 2. Initialise tracing (early — so signal/IO bringup is observable).
-//! 3. Build a tokio runtime and an [`async_main`] that
-//!    - installs the [`signal::SignalListener`] against a fresh
-//!      [`CancellationToken`],
-//!    - runs the raw-mode demo loop (Issue #4) until either a key
-//!      sequence or the cancel token tells it to stop,
-//!    - returns the listener's exit code.
+//! 1. Parse CLI args + initialise tracing.
+//! 2. Acquire a UUCP lock for the device path (Unix only; no-op on
+//!    Windows).
+//! 3. Enable raw mode if stdin is a TTY (skip otherwise — pipes and
+//!    CI shells need byte-mode reads for `run_stdin_reader`).
+//! 4. Build a tokio runtime and:
+//!    - install [`signal::SignalListener`] against the session's
+//!      [`CancellationToken`];
+//!    - open the device, build a [`Session`] with omap/imap from the
+//!      CLI, spawn the run loop;
+//!    - spawn [`stdin::run_stdin_reader`] feeding the session's bus;
+//!    - spawn [`terminal::run_terminal_renderer`] writing the bus
+//!      back to stdout;
+//!    - await all three tasks.
+//! 5. Return `SignalListener::exit_code()` as the process exit code.
 //!
-//! The Session/Stdin/Mapper wiring lives in later issues; this file is
-//! the smallest thing that exercises every cleanup path end-to-end.
+//! `RawModeGuard` and `UucpLock` are RAII handles bound to the
+//! synchronous `main` so their `Drop` fires after the runtime block
+//! returns — even on signal-driven shutdown.
 
 #![forbid(unsafe_code)]
 
@@ -22,18 +30,17 @@ mod stdin;
 mod terminal;
 mod tty;
 
-use std::io::{self, Write};
+use std::io::{self, IsTerminal};
 use std::process::ExitCode;
-use std::time::Duration;
 
-use anyhow::{Context, Result};
 use clap::Parser;
-use crossterm::event::{self, Event, KeyCode, KeyModifiers};
-use tokio_util::sync::CancellationToken;
+use rtcom_core::{LineEndingMapper, SerialPortDevice, Session, UucpLock};
 use tracing_subscriber::EnvFilter;
 
 use crate::args::Cli;
 use crate::signal::SignalListener;
+use crate::stdin::run_stdin_reader;
+use crate::terminal::run_terminal_renderer;
 use crate::tty::RawModeGuard;
 
 fn main() -> ExitCode {
@@ -43,6 +50,30 @@ fn main() -> ExitCode {
     if !cli.quiet {
         print_config_summary(&cli);
     }
+
+    let lock = match UucpLock::acquire(&cli.device) {
+        Ok(lock) => lock,
+        Err(err) => {
+            eprintln!("rtcom: {err}");
+            return ExitCode::from(1);
+        }
+    };
+
+    // Only enter raw mode if we're hooked to a real terminal. Piped
+    // stdin (CI, scripts, the e2e tests) is read byte-by-byte via
+    // tokio::io::stdin, no termios changes needed.
+    let raw_guard = if io::stdin().is_terminal() {
+        match RawModeGuard::install() {
+            Ok(g) => Some(g),
+            Err(err) => {
+                tracing::warn!(%err, "could not enable raw mode; continuing without it");
+                None
+            }
+        }
+    } else {
+        tracing::info!("stdin is not a TTY — skipping raw mode");
+        None
+    };
 
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -55,14 +86,38 @@ fn main() -> ExitCode {
         }
     };
 
-    let exit_code = runtime.block_on(async_main());
+    let exit_code = runtime.block_on(async_main(cli));
+
+    // Explicit drops to make the cleanup order obvious: termios first,
+    // then the lock file. Both are Drop-safe so falling out of scope
+    // would do the same thing — kept for documentation value.
+    drop(raw_guard);
+    drop(lock);
+
     #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
     ExitCode::from(exit_code as u8)
 }
 
-/// Async body of `main`. Returns the desired process exit code.
-async fn async_main() -> i32 {
-    let cancel = CancellationToken::new();
+async fn async_main(cli: Cli) -> i32 {
+    let device = match SerialPortDevice::open(&cli.device, cli.to_serial_config()) {
+        Ok(d) => d,
+        Err(err) => {
+            eprintln!("rtcom: open {} failed: {err}", cli.device);
+            return 1;
+        }
+    };
+
+    let session = Session::new(device)
+        .with_omap(LineEndingMapper::new(cli.omap.into()))
+        .with_imap(LineEndingMapper::new(cli.imap.into()));
+
+    let bus = session.bus().clone();
+    let cancel = session.cancellation_token();
+
+    // Pre-subscribe BEFORE spawning the renderer so it sees every
+    // event published from this point on (broadcast channels do not
+    // replay history).
+    let renderer_rx = bus.subscribe();
 
     let listener = match SignalListener::install(cancel.clone()) {
         Ok(l) => l,
@@ -72,17 +127,33 @@ async fn async_main() -> i32 {
         }
     };
 
-    if let Err(err) = run_demo(cancel.clone()).await {
-        tracing::error!(error = %err, "demo loop failed");
-        eprintln!("rtcom: {err:#}");
+    let session_handle = tokio::spawn(session.run());
+    let renderer_handle = tokio::spawn(run_terminal_renderer(
+        renderer_rx,
+        cancel.clone(),
+        tokio::io::stdout(),
+    ));
+    let stdin_handle = tokio::spawn(run_stdin_reader(
+        tokio::io::stdin(),
+        bus,
+        cancel,
+        cli.escape,
+    ));
+
+    // The session loop terminates either on a Quit command (dispatcher
+    // cancels the token) or on a fatal I/O error. The signal handlers
+    // trip the same token. Stdin and the renderer observe it too and
+    // wind down on their own.
+    if let Err(err) = session_handle.await {
+        tracing::error!(error = %err, "session task panicked");
         return 1;
     }
+    let _ = renderer_handle.await;
+    let _ = stdin_handle.await;
 
     listener.exit_code()
 }
 
-/// Initialises the global `tracing` subscriber, mapping `-v` count to a
-/// default filter level and respecting `RUST_LOG` if set.
 fn init_tracing(verbosity: u8) {
     let default_level = match verbosity {
         0 => "warn",
@@ -96,48 +167,6 @@ fn init_tracing(verbosity: u8) {
         .with_env_filter(filter)
         .with_writer(io::stderr)
         .init();
-}
-
-/// Raw-mode demo loop, runs on a blocking thread so the synchronous
-/// `crossterm::event::poll` does not stall the tokio runtime.
-async fn run_demo(cancel: CancellationToken) -> Result<()> {
-    tokio::task::spawn_blocking(move || -> Result<()> {
-        let _guard =
-            RawModeGuard::install().context("failed to enable raw mode (is stdin a TTY?)")?;
-
-        let mut stdout = io::stdout();
-        writeln!(
-            stdout,
-            "rtcom raw-mode demo — q or Ctrl-C to quit, p to panic (cleanup test)\r"
-        )?;
-        stdout.flush()?;
-
-        loop {
-            // Cooperative cancellation between event polls. 200 ms is a
-            // tradeoff: short enough that an external SIGTERM exits in
-            // well under a second; long enough that the busy-wait cost
-            // is negligible.
-            if cancel.is_cancelled() {
-                break;
-            }
-            if event::poll(Duration::from_millis(200))? {
-                if let Event::Key(key) = event::read()? {
-                    match (key.code, key.modifiers) {
-                        (KeyCode::Char('q') | KeyCode::Esc, _)
-                        | (KeyCode::Char('c'), KeyModifiers::CONTROL) => break,
-                        (KeyCode::Char('p'), _) => panic!("rtcom: panic-recovery test"),
-                        _ => {}
-                    }
-                }
-            }
-        }
-
-        writeln!(stdout, "rtcom: bye\r")?;
-        stdout.flush()?;
-        Ok(())
-    })
-    .await
-    .context("demo task join failed")?
 }
 
 fn print_config_summary(cli: &Cli) {
