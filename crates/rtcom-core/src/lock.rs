@@ -24,12 +24,18 @@
 //! `CreateFile` on a COM port via `SHARE_MODE = 0`. v0.1 leaves the
 //! Windows path empty so the call site stays cross-platform.
 //!
-//! Stub: only the public API shape is in place; the green commit fills
-//! the body.
-
 use std::path::{Path, PathBuf};
 
 use crate::Result;
+
+/// Default system-wide UUCP lock directory.
+#[cfg(unix)]
+const PRIMARY_LOCK_DIR: &str = "/var/lock";
+
+/// Per-user fallback directory used when [`PRIMARY_LOCK_DIR`] is
+/// unwritable.
+#[cfg(unix)]
+const FALLBACK_LOCK_DIR: &str = "/tmp";
 
 /// RAII handle for a UUCP lock file. Drops it when this value goes out
 /// of scope.
@@ -43,7 +49,8 @@ pub struct UucpLock {
 
 impl UucpLock {
     /// Acquires a lock for `device_path`, trying `/var/lock` first and
-    /// falling back to `/tmp` on permission errors.
+    /// falling back to `/tmp` on permission / not-found errors. On
+    /// non-Unix targets this is a no-op.
     ///
     /// # Errors
     ///
@@ -52,20 +59,93 @@ impl UucpLock {
     /// - [`Error::Io`](crate::Error::Io) for filesystem failures the
     ///   fallback cannot recover from.
     pub fn acquire(device_path: &str) -> Result<Self> {
-        let _ = device_path;
-        todo!("UucpLock::acquire — implementation lands in the green commit")
+        #[cfg(not(unix))]
+        {
+            let _ = device_path;
+            return Ok(Self {
+                path: PathBuf::new(),
+                active: false,
+            });
+        }
+        #[cfg(unix)]
+        match Self::acquire_in(device_path, Path::new(PRIMARY_LOCK_DIR)) {
+            Ok(lock) => Ok(lock),
+            Err(crate::Error::Io(err)) if can_fallback(&err) => {
+                tracing::warn!(
+                    primary = PRIMARY_LOCK_DIR,
+                    fallback = FALLBACK_LOCK_DIR,
+                    error = %err,
+                    "UUCP lock falling back to per-user directory",
+                );
+                Self::acquire_in(device_path, Path::new(FALLBACK_LOCK_DIR))
+            }
+            Err(other) => Err(other),
+        }
     }
 
     /// Acquires a lock for `device_path` in the explicit `lock_dir`.
     /// Tests use this entry to point the lock at a temporary directory
-    /// instead of the system-wide path.
+    /// instead of the system-wide path. On non-Unix targets this is a
+    /// no-op.
     ///
     /// # Errors
     ///
     /// Same as [`UucpLock::acquire`] but without the `/tmp` fallback.
+    #[cfg_attr(not(unix), allow(unused_variables))]
     pub fn acquire_in(device_path: &str, lock_dir: &Path) -> Result<Self> {
-        let _ = (device_path, lock_dir);
-        todo!("UucpLock::acquire_in — implementation lands in the green commit")
+        #[cfg(not(unix))]
+        {
+            return Ok(Self {
+                path: PathBuf::new(),
+                active: false,
+            });
+        }
+        #[cfg(unix)]
+        {
+            use std::fs::{self, OpenOptions};
+            use std::io::Write;
+
+            let basename = basename_of(device_path);
+            let lock_path = lock_dir.join(format!("LCK..{basename}"));
+
+            // Pre-existing lock: probe liveness, take over if stale.
+            if lock_path.exists() {
+                match read_pid(&lock_path) {
+                    Ok(pid) if pid_is_alive(pid) => {
+                        return Err(crate::Error::AlreadyLocked {
+                            device: device_path.to_string(),
+                            pid,
+                            lock_file: lock_path,
+                        });
+                    }
+                    // Stale (dead PID) or unreadable (garbage / parse error):
+                    // remove and continue. We deliberately swallow the
+                    // remove error — if it fails, OpenOptions::create_new
+                    // below will fail with EEXIST and we surface that.
+                    _ => {
+                        let _ = fs::remove_file(&lock_path);
+                    }
+                }
+            }
+
+            // O_CREAT | O_EXCL — atomic against a racing process that
+            // landed between our exists() check and this open call.
+            let mut f = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&lock_path)?;
+
+            // UUCP convention: 10-character right-aligned ASCII PID + LF.
+            #[allow(clippy::cast_possible_wrap)]
+            let pid = std::process::id() as i32;
+            writeln!(f, "{pid:>10}")?;
+            f.sync_all()?;
+
+            Ok(Self {
+                path: lock_path,
+                active: true,
+            })
+        }
     }
 
     /// Returns the lock file path this guard owns.
@@ -85,9 +165,40 @@ impl Drop for UucpLock {
 
 /// Returns the basename of `path` (the part after the last `/`), or the
 /// whole string if no separator is present.
-#[allow(dead_code, reason = "called by acquire_in once the green commit lands")]
 fn basename_of(path: &str) -> &str {
     path.rsplit('/').next().unwrap_or(path)
+}
+
+/// Reads a UUCP lock file and parses its content as a PID.
+#[cfg(unix)]
+fn read_pid(lock_path: &Path) -> Result<i32> {
+    let content = std::fs::read_to_string(lock_path)?;
+    content
+        .trim()
+        .parse::<i32>()
+        .map_err(|err| crate::Error::InvalidLock(format!("{err} in {content:?}")))
+}
+
+/// `kill(pid, 0)` returns `Ok` for a live process, `ESRCH` for a dead
+/// one, `EPERM` for "exists but not ours". Treat the latter two as
+/// "alive enough to refuse the lock" only when the OS says alive.
+#[cfg(unix)]
+fn pid_is_alive(pid: i32) -> bool {
+    use nix::sys::signal::kill;
+    use nix::unistd::Pid;
+    matches!(kill(Pid::from_raw(pid), None), Ok(()))
+}
+
+/// Categorises filesystem errors that justify falling back from
+/// `/var/lock` to `/tmp`. Permission denied is the common case (no
+/// `lock` group); not-found means the directory does not exist on this
+/// system at all (some minimal containers).
+#[cfg(unix)]
+fn can_fallback(err: &std::io::Error) -> bool {
+    matches!(
+        err.kind(),
+        std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::NotFound
+    )
 }
 
 #[cfg(test)]
