@@ -99,16 +99,19 @@ fn main() -> ExitCode {
     let quiet = cli.quiet;
     let exit_code = runtime.block_on(async_main(cli));
 
+    // Restore termios BEFORE the goodbye banner so eprintln's `\n`
+    // is translated to `\r\n` again by ONLCR. Without this, raw mode
+    // leaves the cursor wherever the device's last byte put it and
+    // each banner line gets indented to that column.
+    drop(raw_guard);
+
     if !quiet {
-        eprintln!();
-        eprintln!("Terminating...");
-        eprintln!("Thanks for using rtcom");
+        // Leading \r\n is belt-and-suspenders: even if termios
+        // restoration races a final byte from the device, we still
+        // park the banner at column 0.
+        eprint!("\r\nTerminating...\r\nThanks for using rtcom\r\n");
     }
 
-    // Explicit drops to make the cleanup order obvious: termios first,
-    // then the lock file. Both are Drop-safe so falling out of scope
-    // would do the same thing — kept for documentation value.
-    drop(raw_guard);
     drop(lock);
 
     #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
@@ -167,10 +170,12 @@ async fn async_main(cli: Cli) -> i32 {
     // Mark the boundary between "rtcom is starting up" prints and
     // actual session traffic, so users see a stable "ready" line
     // before they start typing. Suppressed by --quiet.
+    //
+    // Explicit \r\n because raw mode is already active here — bare
+    // \n would leave the cursor at whatever column the previous
+    // print landed on, mis-aligning subsequent device output.
     if !cli.quiet {
-        eprintln!();
-        eprintln!("Terminal ready");
-        eprintln!();
+        eprint!("Terminal ready\r\n\r\n");
     }
 
     // The session loop terminates on a Quit command, a fatal I/O
