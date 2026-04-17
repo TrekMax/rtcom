@@ -17,7 +17,8 @@ sharing.
 - Async serial I/O built on `tokio-serial` (Linux / macOS / BSD).
 - UUCP-style lock files so two `rtcom` instances cannot race the same
   device.
-- Interactive command key (`^T` by default) with:
+- Interactive command key (`^A` by default, configurable via
+  `--escape`) with:
   `?`/`h` help, `q`/`x` quit, `c` show config, `t`/`g` toggle DTR/RTS,
   `\` send break, `b<rate><Enter>` change baud rate.
 - CR/LF mappers (`--omap` / `--imap` / `--emap`) following picocom's
@@ -71,9 +72,10 @@ meantime, `cargo install` is the canonical path.
 
 ## Command keys
 
-Once a session is running, the escape key (default `^T`) puts the
-parser into command mode. The next byte is matched against this
-table; unknown keys silently return to default mode.
+Once a session is running, the escape key (default `^A` = Ctrl-A;
+override with `--escape '^T'` etc.) puts the parser into command
+mode. The next byte is matched against this table; unknown keys
+silently return to default mode.
 
 | Key | Action |
 |-----|--------|
@@ -83,8 +85,8 @@ table; unknown keys silently return to default mode.
 | `t` | Toggle DTR |
 | `g` | Toggle RTS |
 | `\` | Send a 250 ms line break |
-| `b<rate><Enter>` | Change baud rate (e.g. `^T b 115200 <Enter>`) |
-| `^T` (the escape key again) | Send the escape byte verbatim to the wire |
+| `b<rate><Enter>` | Change baud rate (e.g. `^A b 115200 <Enter>`) |
+| The escape key again | Send the escape byte verbatim to the wire |
 | `Esc` | Cancel command mode, return to default |
 
 ## vs. picocom / tio
@@ -95,7 +97,7 @@ table; unknown keys silently return to default mode.
 | UUCP lock files | ✅ | ✅ | ✅ |
 | Raw-mode cleanup on any exit path | ⚠️ | ⚠️ | ✅ |
 | CR/LF omap/imap/emap | ✅ | ❌ | ✅ |
-| `^T <key>` command parser | ✅ | ✅ | ✅ |
+| `^A <key>` command parser | ✅ | ✅ | ✅ |
 | Library API (`rtcom-core`) | ❌ | ❌ | ✅ |
 | Native Windows backend | ❌ | ❌ | 🚧 v0.8 |
 | Structured logging / `tracing` | ❌ | ❌ | ✅ |

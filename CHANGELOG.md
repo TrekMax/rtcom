@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Default command-key escape switched from `^T` (Ctrl-T) to `^A`
+  (Ctrl-A). Picocom's historical default; survives tmux's prefix
+  binding and terminal emulators that use Ctrl-T for "new tab".
+  Override with `--escape '^T'` to restore the previous behaviour.
+
+### Fixed
+
+- Terminal renderer now surfaces `Event::DeviceDisconnected` as a
+  `*** rtcom: device disconnected: <reason>` system message, with a
+  post-cancel drain so the message is not lost when `main` trips
+  the cancellation token immediately after `Session::run` exits on
+  a disconnect.
+- `main` propagates session shutdown to the stdin reader and
+  terminal renderer via a cloned cancel token, fixing a hang when
+  the device disappears (previously `stdin` and the renderer kept
+  running with nothing to do).
+- TTY-stdin sessions now print a quit-key hint at startup so users
+  can find their way out without consulting the man page:
+  `rtcom: press ^A q to quit (Ctrl-C is sent to the device in raw mode)`.
+
 ## [0.1.0] — 2026-04-17
 
 First tagged release. Establishes the workspace, the library API,

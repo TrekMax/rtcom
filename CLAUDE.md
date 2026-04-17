@@ -418,7 +418,7 @@ strip = true
   - `-f, --flow <none|hw|sw>`(默认 none)
   - `--no-reset`(启动不 toggle DTR)
   - `--echo`(开本地回显)
-  - `--escape <CHAR>`(命令键,默认 `^T`)
+  - `--escape <CHAR>`(命令键,默认 `^A`;`^T` 在 tmux/某些终端会被截走)
   - `-q, --quiet`
   - `-v, --verbose`(可累加)
 - 解析结果转换成 `rtcom_core::SerialConfig`
@@ -477,7 +477,7 @@ strip = true
 - `rtcom-core/src/command.rs`:定义 `Command` enum 和 `CommandKeyParser` 状态机
 - 状态机逻辑:
   - 默认状态:字节直接变 `Event::TxBytes`
-  - 遇到 escape char(默认 `^T`):进入命令等待状态
+  - 遇到 escape char(默认 `^A`):进入命令等待状态
   - 收到下一字节:查表转成 `Command`(或 `Unknown`)
   - 超时 / Esc:退出命令状态
 - 命令键表(v0.1 最小集):

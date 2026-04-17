@@ -24,9 +24,10 @@ or
 on Windows) as a serial port and bridges it to the terminal. Bytes
 typed on stdin are sent to the device; bytes received from the device
 are written to stdout. An interactive command-key prefix
-.RB ( ^T
-by default) gives access to runtime controls without leaving the
-session.
+.RB ( ^A
+= Ctrl-A by default; override with
+.BR \-\-escape )
+gives access to runtime controls without leaving the session.
 .PP
 The program enables terminal raw mode when stdin is a TTY and
 restores it on every exit path (clean exit, panic, SIGINT / SIGTERM /
@@ -89,10 +90,14 @@ Locally echo keystrokes to stdout as they are sent. Off by default.
 .B \-\-escape " " \fICHAR\fR
 Override the command key. Accepts a single literal character or
 caret notation
-.RI ( ^T ,
-.IR ^A ,
+.RI ( ^A ,
+.IR ^T ,
 ...). Default:
-.IR ^T .
+.I ^A
+(Ctrl-A) — picocom's historical default. Avoid
+.I ^T
+on hosts where tmux's prefix is bound to it or the terminal
+emulator binds Ctrl-T to "new tab".
 .TP
 .BR \-q ", " \-\-quiet
 Suppress the startup configuration banner on stderr.
@@ -114,9 +119,10 @@ Print version and exit.
 .
 .SH COMMAND KEYS
 After typing the escape key
-.RB ( ^T
-by default), the next byte is matched against this table. Unknown
-keys silently return to normal mode.
+.RB ( ^A
+by default; the startup banner echoes the configured one), the next
+byte is matched against this table. Unknown keys silently return to
+normal mode.
 .TP
 .BR ? " | " h
 Print the command-key cheatsheet as a system message (prefixed
@@ -148,7 +154,7 @@ accumulate until
 .B Esc
 in the digit-collection state also cancels.
 .TP
-.B ^T
+.B "the escape key again"
 Send the escape byte itself to the wire. Useful when the configured
 escape key collides with a byte the remote expects.
 .TP
@@ -159,7 +165,8 @@ Cancel command mode without doing anything.
 .TP
 .B 0
 The session completed cleanly (user pressed
-.B ^Tq
+.BR ^Aq " (or the configured escape +"
+.BR q )
 or the device hit EOF).
 .TP
 .B 1
