@@ -96,7 +96,14 @@ fn main() -> ExitCode {
         }
     };
 
+    let quiet = cli.quiet;
     let exit_code = runtime.block_on(async_main(cli));
+
+    if !quiet {
+        eprintln!();
+        eprintln!("Terminating...");
+        eprintln!("Thanks for using rtcom");
+    }
 
     // Explicit drops to make the cleanup order obvious: termios first,
     // then the lock file. Both are Drop-safe so falling out of scope
@@ -156,6 +163,15 @@ async fn async_main(cli: Cli) -> i32 {
         cancel,
         cli.escape,
     ));
+
+    // Mark the boundary between "rtcom is starting up" prints and
+    // actual session traffic, so users see a stable "ready" line
+    // before they start typing. Suppressed by --quiet.
+    if !cli.quiet {
+        eprintln!();
+        eprintln!("Terminal ready");
+        eprintln!();
+    }
 
     // The session loop terminates on a Quit command, a fatal I/O
     // error (device disconnect), or a signal. We own the "session is

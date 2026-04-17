@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `-V` / `--version` now embeds the short git commit hash (and a
+  `-dirty` marker when the working tree has uncommitted changes):
+  `rtcom 0.1.0 (5a103b2a)` for clean checkouts,
+  `rtcom 0.1.0 (5a103b2a-dirty)` otherwise. Falls back to the bare
+  `rtcom 0.1.0` for crates.io tarball builds where git is not
+  available.
+- Lifecycle banner prints between the config summary and the
+  interactive session (`Terminal ready`) and again on shutdown
+  (`Terminating...` / `Thanks for using rtcom`). Suppressed by
+  `--quiet`. Mirrors picocom's "Terminal ready" / "Terminating..."
+  affordance so users can tell at a glance whether rtcom is up,
+  in-session, or shutting down.
+
 ### Changed
 
 - Default command-key escape switched from `^T` (Ctrl-T) to `^A`
