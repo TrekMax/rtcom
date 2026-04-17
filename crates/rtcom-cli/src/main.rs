@@ -34,7 +34,7 @@ use std::io::{self, IsTerminal};
 use std::process::ExitCode;
 
 use clap::Parser;
-use rtcom_core::{LineEndingMapper, SerialPortDevice, Session, UucpLock};
+use rtcom_core::{LineEndingMapper, SerialDevice, SerialPortDevice, Session, UucpLock};
 use tracing_subscriber::EnvFilter;
 
 use crate::args::Cli;
@@ -119,7 +119,7 @@ fn main() -> ExitCode {
 }
 
 async fn async_main(cli: Cli) -> i32 {
-    let device = match SerialPortDevice::open(&cli.device, cli.to_serial_config()) {
+    let mut device = match SerialPortDevice::open(&cli.device, cli.to_serial_config()) {
         Ok(d) => d,
         Err(err) => {
             eprintln!("rtcom: open {} failed: {err}", cli.device);
@@ -127,9 +127,25 @@ async fn async_main(cli: Cli) -> i32 {
         }
     };
 
+    // Apply --lower-dtr / --raise-dtr / --lower-rts / --raise-rts
+    // immediately after open and before Session takes ownership of
+    // the device. Picocom's "do not reset the MCU when I open the
+    // port" recipe is `--lower-dtr --lower-rts`, which only works if
+    // the deassert happens here — once Session.run starts, the
+    // device is moved into the loop and the only way back is via a
+    // ToggleDtr / ToggleRts command.
+    if let Err(err) = apply_initial_lines(&mut device, &cli) {
+        eprintln!("rtcom: failed to set initial DTR/RTS state: {err}");
+        return 1;
+    }
+    let initial_dtr = !cli.lower_dtr;
+    let initial_rts = !cli.lower_rts;
+
     let session = Session::new(device)
         .with_omap(LineEndingMapper::new(cli.omap.into()))
-        .with_imap(LineEndingMapper::new(cli.imap.into()));
+        .with_imap(LineEndingMapper::new(cli.imap.into()))
+        .with_initial_dtr(initial_dtr)
+        .with_initial_rts(initial_rts);
 
     let bus = session.bus().clone();
     let cancel = session.cancellation_token();
@@ -209,6 +225,24 @@ fn init_tracing(verbosity: u8) {
         .with_env_filter(filter)
         .with_writer(io::stderr)
         .init();
+}
+
+/// Applies `--lower-dtr` / `--raise-dtr` / `--lower-rts` / `--raise-rts`
+/// to the freshly-opened device. Each flag pair is mutually exclusive
+/// at the clap level, so the precedence here (lower-then-raise) only
+/// matters as a tiebreaker that can never trigger.
+fn apply_initial_lines(device: &mut SerialPortDevice, cli: &Cli) -> Result<(), rtcom_core::Error> {
+    if cli.lower_dtr {
+        device.set_dtr(false)?;
+    } else if cli.raise_dtr {
+        device.set_dtr(true)?;
+    }
+    if cli.lower_rts {
+        device.set_rts(false)?;
+    } else if cli.raise_rts {
+        device.set_rts(true)?;
+    }
+    Ok(())
 }
 
 fn print_config_summary(cli: &Cli) {
