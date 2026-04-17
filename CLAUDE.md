@@ -32,8 +32,8 @@
 | 项目名 | rtcom |
 | 全称 | Rust Terminal Communication |
 | 类型 | CLI 工具 + 可复用库 |
-| 语言 | Rust (MSRV 1.75) |
-| License | MIT OR Apache-2.0 |
+| 语言 | Rust (MSRV 1.85) |
+| License | Apache-2.0 |
 | 发布渠道 | crates.io, GitHub Releases, Homebrew, AUR, winget |
 
 ### 一句话描述
@@ -287,7 +287,7 @@ rtcom/
 ├── CLAUDE.md                       # 本文档(项目上下文)
 ├── CONTRIBUTING.md
 ├── README.md
-└── LICENSE-MIT / LICENSE-APACHE
+└── LICENSE                         # Apache-2.0
 ```
 
 ### 根 Cargo.toml 骨架
@@ -300,8 +300,8 @@ resolver = "2"
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.75"
-license = "MIT OR Apache-2.0"
+rust-version = "1.85"
+license = "Apache-2.0"
 repository = "https://github.com/YOUR_USER/rtcom"
 authors = ["TrekMax <your@email>"]
 
@@ -369,14 +369,14 @@ strip = true
 **任务**:
 - 创建 workspace 目录结构(见 §5)
 - 写根 `Cargo.toml`(见 §5 骨架)
-- 写 `rust-toolchain.toml` 固定 stable 1.75
+- 写 `rust-toolchain.toml` 固定 stable 1.85(满足 clap 4.6+ 等依赖的 `edition2024` 要求)
 - 写 `rustfmt.toml`(`edition = "2021"`, `max_width = 100`)
 - 创建 `.github/workflows/ci.yml`:
   - 矩阵:`ubuntu-latest`, `macos-latest`, `windows-latest`
   - 步骤:`cargo fmt --check` → `cargo clippy --all-targets -- -D warnings` → `cargo test --all-features` → `cargo doc --no-deps`
 - 创建空的 `crates/rtcom-core`(lib)和 `crates/rtcom-cli`(bin)
 - `rtcom-cli` 的 `main.rs` 只需 `fn main() { println!("rtcom"); }`
-- 写最小 `README.md` 和 `LICENSE-MIT`/`LICENSE-APACHE`
+- 写最小 `README.md`,沿用现有 `LICENSE`(Apache-2.0)
 
 **验收标准**:
 - `cargo build --workspace` 成功
@@ -622,6 +622,59 @@ strip = true
 ---
 
 ## 8. 开发工作流
+
+### 核心原则:TDD + 边开发边提交
+
+本项目**强制采用 TDD(测试驱动开发)** 与 **频繁提交** 的工作模式。这两条不是建议,是基本盘。
+
+#### TDD 红 → 绿 → 重构
+
+每个新增/修改的功能,按以下顺序推进:
+
+1. **红(Red)**:先写一个能表达"目标行为"的最小测试,运行它,**确认它失败**。
+   - 单元测试 → 放在被测模块下的 `#[cfg(test)] mod tests`
+   - 跨模块行为 → 放在 crate 的 `tests/` 下做集成测试
+   - 验收级行为 → 放在 `crates/rtcom-cli/tests/` 做端到端
+   - 测试必须**先于实现**写出。失败信息要清晰地反映"差什么"。
+
+2. **绿(Green)**:写**最小可用**实现让测试通过,允许丑陋、允许重复,**先跑过再说**。
+   - 不要顺便 refactor 已有代码
+   - 不要为了"以后可能要"提前抽象
+   - `cargo test` 全绿是过这一关的唯一标准
+
+3. **重构(Refactor)**:测试还在绿的前提下,清理刚写的实现。
+   - 提取重复 / 命名 / 模块边界
+   - 跑 `cargo fmt && cargo clippy --all-targets -- -D warnings` 必须无 warning
+   - 重构期间**不允许动测试**;测试是契约,改测试 = 改契约 = 回到红色阶段
+
+#### 提交节奏
+
+**完成一个 TDD 循环就提交一次,不要攒。** Claude Code 在工作过程中,每完成下面任一动作都应当立即 `git commit`:
+
+| 触发 | 提交类型 | 例子 |
+|---|---|---|
+| 写完红色测试,确认失败 | `test(...)` | `test(core): add failing test for EventBus.publish` |
+| 让测试转绿的最小实现 | `feat(...)` / `fix(...)` | `feat(core): implement EventBus.publish` |
+| 重构通过后的清理 | `refactor(...)` | `refactor(core): extract spawn_reader_task helper` |
+| 文档 / 配置 / CI 改动 | `docs/chore/ci/build(...)` | `docs(core): add SerialDevice trait example` |
+
+**禁止**:
+- 一个 commit 同时含两个 issue 的工作
+- 一个 commit 同时含"实现 + 重构 + 无关文档调整"
+- 把"还在红"的测试和"补救实现"塞同一个 commit(看不出 TDD 痕迹)
+
+**允许且鼓励**:
+- 一个 issue 拆成 5+ 个小 commit
+- 把测试 commit 和实现 commit 分开,读 git log 时一眼能看到 TDD 痕迹
+- 在 commit message 里写为什么这么改(WHY),代码本身已经说了 WHAT
+
+每个 commit 之前必须本地通过:
+
+```bash
+cargo fmt --check && \
+cargo clippy --workspace --all-targets --all-features -- -D warnings && \
+cargo test --workspace --all-features
+```
 
 ### 分支模型
 
