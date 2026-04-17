@@ -35,13 +35,11 @@ pub enum ParseOutput {
 
 /// State machine that splits stdin bytes into "data to send" vs.
 /// "commands to dispatch" using the configurable escape key.
-#[allow(dead_code, reason = "fields are written by the green commit")]
 pub struct CommandKeyParser {
     escape: u8,
     state: State,
 }
 
-#[allow(dead_code, reason = "variants are constructed by the green commit")]
 enum State {
     Default,
     AwaitingCommand,
@@ -67,10 +65,68 @@ impl CommandKeyParser {
 
     /// Feed a single input byte; returns whatever the parser decided to
     /// emit for it.
-    pub fn feed(&mut self, _byte: u8) -> ParseOutput {
-        todo!("CommandKeyParser::feed — implementation lands in the green commit")
+    ///
+    /// State transitions (with `^T` as the escape byte for illustration):
+    ///
+    /// | from \ byte         | `^T`              | `Esc` (`0x1b`)   | mapped command  | `b`                         | digit (in baud sub-state) | `\r` / `\n` (in baud sub-state) | other                |
+    /// |---------------------|-------------------|------------------|-----------------|-----------------------------|---------------------------|---------------------------------|----------------------|
+    /// | Default             | → AwaitingCommand | → Data(byte)     | → Data(byte)    | → Data(byte)                | n/a                       | n/a                             | → Data(byte)         |
+    /// | AwaitingCommand     | → Data(`^T`)      | → Default        | → Command(...)  | → AwaitingBaudDigits        | n/a                       | n/a                             | → Default (drop)     |
+    /// | AwaitingBaudDigits  | → Default (drop)  | → Default        | → Default (drop)| → Default (drop)            | append, stay              | → SetBaud / Default             | → Default (drop)     |
+    pub fn feed(&mut self, byte: u8) -> ParseOutput {
+        match std::mem::replace(&mut self.state, State::Default) {
+            State::Default => {
+                if byte == self.escape {
+                    self.state = State::AwaitingCommand;
+                    ParseOutput::None
+                } else {
+                    ParseOutput::Data(byte)
+                }
+            }
+            State::AwaitingCommand => self.handle_command_byte(byte),
+            State::AwaitingBaudDigits(buf) => self.handle_baud_byte(buf, byte),
+        }
+    }
+
+    fn handle_command_byte(&mut self, byte: u8) -> ParseOutput {
+        if byte == self.escape {
+            // Double-escape: pass the escape character through as data.
+            return ParseOutput::Data(self.escape);
+        }
+        match byte {
+            ESC_KEY => ParseOutput::None,
+            b'?' | b'h' => ParseOutput::Command(Command::Help),
+            b'q' | b'x' => ParseOutput::Command(Command::Quit),
+            b'c' => ParseOutput::Command(Command::ShowConfig),
+            b't' => ParseOutput::Command(Command::ToggleDtr),
+            b'g' => ParseOutput::Command(Command::ToggleRts),
+            b'\\' => ParseOutput::Command(Command::SendBreak),
+            b'b' => {
+                self.state = State::AwaitingBaudDigits(String::new());
+                ParseOutput::None
+            }
+            _ => ParseOutput::None,
+        }
+    }
+
+    fn handle_baud_byte(&mut self, mut buf: String, byte: u8) -> ParseOutput {
+        match byte {
+            b'\r' | b'\n' => match buf.parse::<u32>() {
+                Ok(rate) if rate > 0 => ParseOutput::Command(Command::SetBaud(rate)),
+                _ => ParseOutput::None,
+            },
+            ESC_KEY => ParseOutput::None,
+            d if d.is_ascii_digit() => {
+                buf.push(d as char);
+                self.state = State::AwaitingBaudDigits(buf);
+                ParseOutput::None
+            }
+            _ => ParseOutput::None,
+        }
     }
 }
+
+const ESC_KEY: u8 = 0x1b;
 
 #[cfg(test)]
 mod tests {
