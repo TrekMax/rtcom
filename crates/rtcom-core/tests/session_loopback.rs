@@ -9,7 +9,7 @@
 use std::time::Duration;
 
 use bytes::Bytes;
-use rtcom_core::{Command, Event, SerialPortDevice, Session};
+use rtcom_core::{Command, Event, LineEnding, LineEndingMapper, SerialPortDevice, Session};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::broadcast::Receiver;
 use tokio::time::timeout;
@@ -120,6 +120,64 @@ async fn wait_for(rx: &mut Receiver<Event>, mut pred: impl FnMut(&Event) -> bool
     })
     .await
     .expect("predicate never matched within STEP_TIMEOUT")
+}
+
+#[tokio::test]
+async fn omap_add_cr_to_lf_converts_lf_to_crlf_on_wire() {
+    let (mut external, internal) = SerialPortDevice::pair().expect("pty pair");
+    let session = Session::new(internal).with_omap(LineEndingMapper::new(LineEnding::AddCrToLf));
+    let bus = session.bus().clone();
+    let cancel = session.cancellation_token();
+
+    let session_handle = tokio::spawn(session.run());
+    tokio::task::yield_now().await;
+
+    bus.publish(Event::TxBytes(Bytes::from_static(b"hi\n")));
+
+    let mut wire = [0_u8; 4];
+    timeout(STEP_TIMEOUT, external.read_exact(&mut wire))
+        .await
+        .expect("timed out reading mapped bytes")
+        .expect("read failed");
+    assert_eq!(&wire, b"hi\r\n");
+
+    cancel.cancel();
+    timeout(STEP_TIMEOUT, session_handle)
+        .await
+        .expect("session did not shut down")
+        .expect("session task panicked")
+        .expect("session returned error");
+}
+
+#[tokio::test]
+async fn imap_add_cr_to_lf_converts_received_lf_to_crlf_in_event() {
+    let (mut external, internal) = SerialPortDevice::pair().expect("pty pair");
+    let session = Session::new(internal).with_imap(LineEndingMapper::new(LineEnding::AddCrToLf));
+    let bus = session.bus().clone();
+    let cancel = session.cancellation_token();
+    let mut rx = bus.subscribe();
+
+    let session_handle = tokio::spawn(session.run());
+    tokio::task::yield_now().await;
+
+    external.write_all(b"hi\n").await.unwrap();
+    external.flush().await.unwrap();
+
+    let mut received = Vec::new();
+    while received.len() < 4 {
+        let event = wait_for(&mut rx, |e| matches!(e, Event::RxBytes(_))).await;
+        if let Event::RxBytes(bytes) = event {
+            received.extend_from_slice(&bytes);
+        }
+    }
+    assert_eq!(&received[..4], b"hi\r\n");
+
+    cancel.cancel();
+    timeout(STEP_TIMEOUT, session_handle)
+        .await
+        .expect("session did not shut down")
+        .expect("session task panicked")
+        .expect("session returned error");
 }
 
 #[tokio::test]

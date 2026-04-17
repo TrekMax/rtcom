@@ -32,6 +32,7 @@ use crate::command::Command;
 use crate::config::{Parity, StopBits};
 use crate::device::SerialDevice;
 use crate::event::{Event, EventBus};
+use crate::mapper::{LineEndingMapper, Mapper};
 
 const fn parity_letter(p: Parity) -> char {
     match p {
@@ -70,6 +71,12 @@ pub struct Session<D: SerialDevice + 'static> {
     device: D,
     bus: EventBus,
     cancel: CancellationToken,
+    /// Outbound mapper applied to `Event::TxBytes` payloads before they
+    /// hit the device. Defaults to a no-op `LineEndingMapper::default()`.
+    omap: Box<dyn Mapper>,
+    /// Inbound mapper applied to bytes read from the device before they
+    /// are republished as `Event::RxBytes`. Defaults to no-op.
+    imap: Box<dyn Mapper>,
     /// Tracked DTR state. Initialised to `true` because `SerialDevice`
     /// gives no way to query the line, and most backends open with DTR
     /// asserted; the first toggle therefore deasserts.
@@ -79,13 +86,16 @@ pub struct Session<D: SerialDevice + 'static> {
 }
 
 impl<D: SerialDevice + 'static> Session<D> {
-    /// Builds a session with a fresh bus and cancellation token.
+    /// Builds a session with a fresh bus and cancellation token,
+    /// no-op mappers on both directions.
     #[must_use]
     pub fn new(device: D) -> Self {
         Self {
             device,
             bus: EventBus::default(),
             cancel: CancellationToken::new(),
+            omap: Box::new(LineEndingMapper::default()),
+            imap: Box::new(LineEndingMapper::default()),
             dtr_asserted: true,
             rts_asserted: true,
         }
@@ -100,9 +110,27 @@ impl<D: SerialDevice + 'static> Session<D> {
             device,
             bus,
             cancel: CancellationToken::new(),
+            omap: Box::new(LineEndingMapper::default()),
+            imap: Box::new(LineEndingMapper::default()),
             dtr_asserted: true,
             rts_asserted: true,
         }
+    }
+
+    /// Replaces the outbound mapper applied to `Event::TxBytes`
+    /// payloads before they reach the device.
+    #[must_use]
+    pub fn with_omap<M: Mapper + 'static>(mut self, mapper: M) -> Self {
+        self.omap = Box::new(mapper);
+        self
+    }
+
+    /// Replaces the inbound mapper applied to bytes read from the
+    /// device before they are republished as `Event::RxBytes`.
+    #[must_use]
+    pub fn with_imap<M: Mapper + 'static>(mut self, mapper: M) -> Self {
+        self.imap = Box::new(mapper);
+        self
     }
 
     /// Returns a reference to the bus. Clone it before calling
