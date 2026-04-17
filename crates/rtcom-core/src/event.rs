@@ -19,6 +19,7 @@ use std::sync::Arc;
 use bytes::Bytes;
 use tokio::sync::broadcast;
 
+use crate::command::Command;
 use crate::config::SerialConfig;
 use crate::error::Error;
 
@@ -39,6 +40,10 @@ pub enum Event {
     /// Bytes pending transmission to the serial device. Publishing this
     /// asks the writer task to send them.
     TxBytes(Bytes),
+    /// A runtime command produced by the keyboard state machine
+    /// (Issue #6); subscribed by the command-handler dispatcher in
+    /// Issue #7.
+    Command(Command),
     /// The session opened the device and is ready to do I/O.
     DeviceConnected,
     /// The session lost the device (EOF, write failure, hot-unplug).
@@ -121,6 +126,18 @@ mod tests {
     async fn publish_with_no_subscribers_returns_zero() {
         let bus = EventBus::new(8);
         assert_eq!(bus.publish(Event::DeviceConnected), 0);
+    }
+
+    #[tokio::test]
+    async fn command_event_round_trips() {
+        use crate::Command;
+        let bus = EventBus::new(8);
+        let mut rx = bus.subscribe();
+        bus.publish(Event::Command(Command::Quit));
+        match rx.recv().await.unwrap() {
+            Event::Command(Command::Quit) => {}
+            other => panic!("unexpected event: {other:?}"),
+        }
     }
 
     #[tokio::test]
