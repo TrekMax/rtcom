@@ -165,12 +165,28 @@ mod tests {
         assert_eq!(p.feed(ESC), ParseOutput::None);
     }
 
+    /// `^Q` (0x11) and `^X` (0x18) are the picocom-style quit keys.
+    /// Lowercase `q`/`x` plain-letters fall through to "unknown" and
+    /// must NOT quit — that mirrors picocom and frees the letters to
+    /// be sent to the wire as data without an extra escape dance.
     #[test]
-    fn escape_then_q_or_x_emits_quit() {
-        for key in [b'q', b'x'] {
+    fn escape_then_ctrl_q_or_ctrl_x_emits_quit() {
+        for key in [0x11_u8, 0x18_u8] {
             let mut p = parser();
             assert_eq!(p.feed(ESC), ParseOutput::None);
             assert_eq!(p.feed(key), ParseOutput::Command(Command::Quit));
+        }
+    }
+
+    #[test]
+    fn escape_then_lowercase_q_or_x_does_not_quit() {
+        for key in [b'q', b'x'] {
+            let mut p = parser();
+            assert_eq!(p.feed(ESC), ParseOutput::None);
+            // Unmapped after escape -> drop and return to default.
+            assert_eq!(p.feed(key), ParseOutput::None);
+            // Default state: next byte passes through verbatim.
+            assert_eq!(p.feed(b'a'), ParseOutput::Data(b'a'));
         }
     }
 
