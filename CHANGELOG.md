@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.2] — 2026-04-17
+
 ### Added
 
 - `--lower-dtr` / `--raise-dtr` / `--lower-rts` / `--raise-rts`
@@ -17,6 +19,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Session::with_initial_dtr` / `Session::with_initial_rts` so the
   cached state stays honest and the first `^A t` / `^A g` toggle
   produces the right transition. Closes [#1].
+
+### Fixed
+
+- `rtcom -V` now embeds the git commit hash for `cargo install`
+  builds too, not just local `cargo install --path` checkouts.
+  v0.1.1 from crates.io showed `rtcom 0.1.1` (no hash) because
+  `build.rs`'s `git rev-parse` had no `.git` to read. The release
+  workflow now writes `crates/rtcom-cli/.commit-hash` before
+  `cargo publish`; `build.rs` falls back to that file when git
+  is unavailable. Tarball builds therefore show
+  `rtcom 0.1.2 (abc12345)`.
 
 [#1]: https://github.com/TrekMax/rtcom/issues/1
 
@@ -166,6 +179,7 @@ use cases.
 - GitHub Actions CI matrix (ubuntu / macos / windows) running fmt,
   clippy `-D warnings`, tests, and `cargo doc -D warnings`.
 
-[Unreleased]: https://github.com/TrekMax/rtcom/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/TrekMax/rtcom/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/TrekMax/rtcom/releases/tag/v0.1.2
 [0.1.1]: https://github.com/TrekMax/rtcom/releases/tag/v0.1.1
 [0.1.0]: https://github.com/TrekMax/rtcom/releases/tag/v0.1.0
