@@ -13,6 +13,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (Ctrl-A). Picocom's historical default; survives tmux's prefix
   binding and terminal emulators that use Ctrl-T for "new tab".
   Override with `--escape '^T'` to restore the previous behaviour.
+- Quit command keys are now `^Q` (Ctrl-Q, 0x11) and `^X` (Ctrl-X,
+  0x18) instead of the plain letters `q` / `x`. Mirrors picocom and
+  frees the letters to be sent to the wire as data without an extra
+  escape dance. Type the escape key followed by Ctrl-Q or Ctrl-X to
+  exit; plain `q` / `x` after the escape now fall into the
+  unknown-command silently-drop path.
 
 ### Fixed
 

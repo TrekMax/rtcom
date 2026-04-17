@@ -128,8 +128,14 @@ normal mode.
 Print the command-key cheatsheet as a system message (prefixed
 .BR "*** rtcom: " ).
 .TP
-.BR q " | " x
-Quit the session cleanly. Exit code
+.BR ^Q " | " ^X
+Quit the session cleanly (Ctrl-Q or Ctrl-X — picocom convention;
+the plain letters
+.B q
+and
+.B x
+fall through to the unknown-command path so they remain usable as
+wire payload). Exit code
 .BR 0 .
 .TP
 .B c
@@ -164,9 +170,9 @@ Cancel command mode without doing anything.
 .SH EXIT STATUS
 .TP
 .B 0
-The session completed cleanly (user pressed
-.BR ^Aq " (or the configured escape +"
-.BR q )
+The session completed cleanly (user pressed the escape key followed
+by
+.BR ^X " or " ^Q ,
 or the device hit EOF).
 .TP
 .B 1

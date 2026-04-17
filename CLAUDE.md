@@ -482,7 +482,7 @@ strip = true
   - 超时 / Esc:退出命令状态
 - 命令键表(v0.1 最小集):
   - `?` / `h` → Help
-  - `x` / `q` → Quit
+  - `^X` / `^Q`(Ctrl-X / Ctrl-Q,picocom 风格)→ Quit
   - `b` → 进入改波特率子状态
   - `t` → Toggle DTR
   - `g` → Toggle RTS

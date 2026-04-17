@@ -19,8 +19,9 @@ sharing.
   device.
 - Interactive command key (`^A` by default, configurable via
   `--escape`) with:
-  `?`/`h` help, `q`/`x` quit, `c` show config, `t`/`g` toggle DTR/RTS,
-  `\` send break, `b<rate><Enter>` change baud rate.
+  `?`/`h` help, `^Q`/`^X` quit (picocom convention), `c` show config,
+  `t`/`g` toggle DTR/RTS, `\` send break, `b<rate><Enter>` change
+  baud rate.
 - CR/LF mappers (`--omap` / `--imap` / `--emap`) following picocom's
   `crlf` / `lfcr` / `igncr` / `ignlf` rule names.
 - Clean shutdown on SIGINT / SIGTERM / SIGHUP (termios restored,
@@ -80,7 +81,7 @@ silently return to default mode.
 | Key | Action |
 |-----|--------|
 | `?` or `h` | Print the command-key cheatsheet |
-| `q` or `x` | Quit the session cleanly |
+| `^Q` or `^X` | Quit the session cleanly (Ctrl-Q / Ctrl-X) |
 | `c` | Show current serial configuration |
 | `t` | Toggle DTR |
 | `g` | Toggle RTS |
