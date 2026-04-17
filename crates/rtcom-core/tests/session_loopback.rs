@@ -288,6 +288,69 @@ async fn dispatch_and_wait_for_message_or_error(cmd: Command) -> Option<String> 
 }
 
 #[tokio::test]
+async fn initial_dtr_lowered_first_toggle_yields_asserted() {
+    // Mirrors what main does after `--lower-dtr`: caller already
+    // called `device.set_dtr(false)` and tells Session about it via
+    // the builder so the cached state is honest. The first ^A t
+    // toggle should therefore raise the line, not lower it again.
+    let (_external, internal) = SerialPortDevice::pair().expect("pty pair");
+    let session = Session::new(internal).with_initial_dtr(false);
+    let bus = session.bus().clone();
+    let cancel = session.cancellation_token();
+    let mut rx = bus.subscribe();
+
+    let h = tokio::spawn(session.run());
+    tokio::task::yield_now().await;
+
+    bus.publish(Event::Command(Command::ToggleDtr));
+
+    let event = wait_for(&mut rx, |e| {
+        matches!(e, Event::SystemMessage(_) | Event::Error(_))
+    })
+    .await;
+    if let Event::SystemMessage(text) = event {
+        assert_eq!(text, "DTR: asserted", "lowered → toggled must be asserted");
+    }
+    // Err path: the PTY rejected set_dtr; proves dispatcher tried.
+
+    cancel.cancel();
+    timeout(STEP_TIMEOUT, h)
+        .await
+        .expect("session shutdown")
+        .expect("task panicked")
+        .expect("session error");
+}
+
+#[tokio::test]
+async fn initial_rts_lowered_first_toggle_yields_asserted() {
+    let (_external, internal) = SerialPortDevice::pair().expect("pty pair");
+    let session = Session::new(internal).with_initial_rts(false);
+    let bus = session.bus().clone();
+    let cancel = session.cancellation_token();
+    let mut rx = bus.subscribe();
+
+    let h = tokio::spawn(session.run());
+    tokio::task::yield_now().await;
+
+    bus.publish(Event::Command(Command::ToggleRts));
+
+    let event = wait_for(&mut rx, |e| {
+        matches!(e, Event::SystemMessage(_) | Event::Error(_))
+    })
+    .await;
+    if let Event::SystemMessage(text) = event {
+        assert_eq!(text, "RTS: asserted", "lowered → toggled must be asserted");
+    }
+
+    cancel.cancel();
+    timeout(STEP_TIMEOUT, h)
+        .await
+        .expect("session shutdown")
+        .expect("task panicked")
+        .expect("session error");
+}
+
+#[tokio::test]
 async fn toggle_dtr_command_emits_system_message_or_error() {
     if let Some(text) = dispatch_and_wait_for_message_or_error(Command::ToggleDtr).await {
         assert!(
