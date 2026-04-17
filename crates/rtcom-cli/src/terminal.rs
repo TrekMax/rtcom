@@ -155,4 +155,40 @@ mod tests {
         cancel.cancel();
         timeout(STEP, task).await.unwrap().unwrap();
     }
+
+    #[tokio::test]
+    async fn device_disconnected_prints_reason_as_system_message() {
+        let (bus, cancel, task, mut reader) = launch();
+        bus.publish(Event::DeviceDisconnected {
+            reason: "EOF on serial read".into(),
+        });
+        let expected = format!("{SYSTEM_PREFIX}device disconnected: EOF on serial read\n");
+        assert_eq!(
+            read_n(&mut reader, expected.len()).await,
+            expected.as_bytes()
+        );
+        cancel.cancel();
+        timeout(STEP, task).await.unwrap().unwrap();
+    }
+
+    /// Regression: when the Session publishes DeviceDisconnected and
+    /// cancellation is tripped at effectively the same time, the
+    /// renderer must still surface the message before shutting down.
+    #[tokio::test]
+    async fn disconnect_published_then_cancelled_still_reaches_user() {
+        let (bus, cancel, task, mut reader) = launch();
+        // Publish the disconnect event, then immediately cancel. The
+        // ordering mirrors what Session::run does on a fatal I/O
+        // error.
+        bus.publish(Event::DeviceDisconnected {
+            reason: "pipe closed".into(),
+        });
+        cancel.cancel();
+        let expected = format!("{SYSTEM_PREFIX}device disconnected: pipe closed\n");
+        assert_eq!(
+            read_n(&mut reader, expected.len()).await,
+            expected.as_bytes()
+        );
+        timeout(STEP, task).await.unwrap().unwrap();
+    }
 }
