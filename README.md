@@ -66,10 +66,29 @@ cargo install --path crates/rtcom-cli --locked
 On Linux you'll need `libudev-dev` (or the equivalent package on your
 distro) for the underlying `serialport` crate.
 
+### Pre-built binaries
+
+Each tagged release publishes pre-built binaries for the major
+platforms — grab one from
+[GitHub Releases](https://github.com/TrekMax/rtcom/releases):
+
+| Platform | Architecture | Asset |
+|----------|--------------|-------|
+| Linux | x86_64 | `rtcom-x86_64-unknown-linux-gnu` |
+| Linux | aarch64 | `rtcom-aarch64-unknown-linux-gnu` |
+| macOS | Intel | `rtcom-x86_64-apple-darwin` |
+| macOS | Apple Silicon | `rtcom-aarch64-apple-darwin` |
+| macOS | Universal | `rtcom-universal-apple-darwin` |
+| Windows | x86_64 | `rtcom-x86_64-pc-windows-msvc.exe` |
+
+Each release also ships a `checksums-sha256.txt` so you can verify the
+download.
+
 ### Distribution packages
 
 Homebrew tap, AUR, and winget packages are planned for v0.2+. In the
-meantime, `cargo install` is the canonical path.
+meantime, `cargo install` or the GitHub Releases tarball is the
+canonical path.
 
 ## Command keys
 

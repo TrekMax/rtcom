@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Infrastructure
+
+- Reworked CI: `fmt` / `clippy` (3-OS matrix) / `test` (3-OS matrix
+  with libudev + socat on Linux for the e2e PTY suite) / `doc`
+  (`-D warnings`) jobs split for fast feedback. Swatinem/rust-cache
+  per-key.
+- New `release.yml` workflow on `v*` tag push:
+  - 5-target build matrix (Linux x86_64 + aarch64-cross, macOS
+    x86_64 + aarch64, Windows x86_64). Cross-compile uses
+    [`cross`](https://github.com/cross-rs/cross) with a
+    `Cross.toml` that installs `libudev-dev:arm64` for the aarch64
+    target.
+  - macOS universal binary via `lipo`.
+  - GitHub Release page with auto-generated notes (CHANGELOG
+    section preferred, commit-log fallback) and SHA-256 checksums.
+  - `cargo publish -p rtcom-core` then `-p rtcom-cli` (with a 45 s
+    sleep between for index propagation), gated on the release
+    job succeeding.
+
 ### Added
 
 - `-V` / `--version` now embeds the short git commit hash (and a
