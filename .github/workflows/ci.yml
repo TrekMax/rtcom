@@ -8,6 +8,9 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  # Same flags rtcom-core / rtcom-cli enforce locally; CI must not be
+  # more lenient than `cargo clippy --workspace -- -D warnings` on
+  # a developer laptop.
   RUSTFLAGS: "-D warnings"
 
 jobs:
@@ -16,30 +19,71 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: "1.85"
           components: rustfmt
       - run: cargo fmt --all -- --check
 
-  check:
-    name: test (${{ matrix.os }})
-    needs: fmt
+  clippy:
+    name: clippy (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    needs: fmt
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: "1.85"
           components: clippy
       - uses: Swatinem/rust-cache@v2
+        with:
+          key: clippy-${{ matrix.os }}
       - name: Install libudev (Linux)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libudev-dev pkg-config
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    needs: fmt
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.85"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: test-${{ matrix.os }}
+      - name: Install libudev + socat (Linux)
+        # libudev for serialport, socat for the e2e PTY-allocation
+        # tests in crates/rtcom-cli/tests/e2e_basic.rs.
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libudev-dev pkg-config socat
       - run: cargo test --workspace --all-features
+
+  doc:
+    name: rustdoc
+    runs-on: ubuntu-latest
+    needs: fmt
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.85"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: doc
+      - name: Install libudev
+        run: sudo apt-get update && sudo apt-get install -y libudev-dev pkg-config
       - run: cargo doc --workspace --no-deps --all-features
         env:
           RUSTDOCFLAGS: "-D warnings"
