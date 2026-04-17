@@ -140,6 +140,110 @@ async fn quit_command_returns_run() {
         .expect("session returned error");
 }
 
+/// Spawns a session, yields once so the loop subscribes, publishes
+/// `cmd`, waits for a `SystemMessage` to arrive on `rx`, then shuts the
+/// session down cleanly. Returns the message text.
+async fn capture_system_message(cmd: Command) -> String {
+    let (_external, internal) = SerialPortDevice::pair().expect("pty pair");
+    let session = Session::new(internal);
+    let bus = session.bus().clone();
+    let cancel = session.cancellation_token();
+    let mut rx = bus.subscribe();
+
+    let session_handle = tokio::spawn(session.run());
+    tokio::task::yield_now().await;
+
+    bus.publish(Event::Command(cmd));
+
+    let event = wait_for(&mut rx, |e| matches!(e, Event::SystemMessage(_))).await;
+    let text = match event {
+        Event::SystemMessage(t) => t,
+        other => panic!("unexpected: {other:?}"),
+    };
+
+    cancel.cancel();
+    timeout(STEP_TIMEOUT, session_handle)
+        .await
+        .expect("session did not shut down")
+        .expect("session task panicked")
+        .expect("session returned error");
+    text
+}
+
+#[tokio::test]
+async fn show_config_command_emits_system_message_with_current_settings() {
+    let text = capture_system_message(Command::ShowConfig).await;
+    // Default config is 115200 8N1 — at minimum the baud should appear.
+    assert!(
+        text.contains("115200"),
+        "expected baud in SystemMessage: {text:?}"
+    );
+}
+
+#[tokio::test]
+async fn help_command_emits_system_message_listing_keys() {
+    let text = capture_system_message(Command::Help).await;
+    assert!(
+        text.to_lowercase().contains("quit"),
+        "expected Help text to mention 'quit': {text:?}"
+    );
+}
+
+#[tokio::test]
+async fn toggle_dtr_command_emits_system_message_with_new_state() {
+    let text = capture_system_message(Command::ToggleDtr).await;
+    assert!(
+        text.contains("DTR"),
+        "expected DTR mention in SystemMessage: {text:?}"
+    );
+}
+
+#[tokio::test]
+async fn toggle_rts_command_emits_system_message_with_new_state() {
+    let text = capture_system_message(Command::ToggleRts).await;
+    assert!(
+        text.contains("RTS"),
+        "expected RTS mention in SystemMessage: {text:?}"
+    );
+}
+
+#[tokio::test]
+async fn send_break_command_emits_system_message() {
+    // PTYs may reject set_break entirely (return Err); accept either
+    // SystemMessage("...break...") or Event::Error as success — both
+    // mean the dispatcher tried.
+    let (_external, internal) = SerialPortDevice::pair().expect("pty pair");
+    let session = Session::new(internal);
+    let bus = session.bus().clone();
+    let cancel = session.cancellation_token();
+    let mut rx = bus.subscribe();
+
+    let session_handle = tokio::spawn(session.run());
+    tokio::task::yield_now().await;
+
+    bus.publish(Event::Command(Command::SendBreak));
+
+    let event = wait_for(&mut rx, |e| {
+        matches!(e, Event::SystemMessage(_) | Event::Error(_))
+    })
+    .await;
+    match event {
+        Event::SystemMessage(text) => assert!(
+            text.to_lowercase().contains("break"),
+            "expected break mention: {text:?}"
+        ),
+        Event::Error(_) => {} // PTY rejected set_break, acceptable
+        other => panic!("unexpected: {other:?}"),
+    }
+
+    cancel.cancel();
+    timeout(STEP_TIMEOUT, session_handle)
+        .await
+        .expect("session did not shut down")
+        .expect("session task panicked")
+        .expect("session returned error");
+}
+
 #[tokio::test]
 async fn set_baud_command_updates_device_and_emits_config_changed() {
     let (_external, internal) = SerialPortDevice::pair().expect("pty pair");
