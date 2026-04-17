@@ -6,12 +6,16 @@
 //! [`RawModeGuard`](crate::tty::RawModeGuard); in tests it accepts any
 //! `AsyncRead`, typically a [`tokio::io::DuplexStream`] half.
 //!
-//! Stub: only the public function shape is in place. The body is filled
-//! in by the green commit.
-
-use rtcom_core::EventBus;
-use tokio::io::AsyncRead;
+use bytes::Bytes;
+use rtcom_core::{CommandKeyParser, Event, EventBus, ParseOutput};
+use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio_util::sync::CancellationToken;
+
+/// Read buffer size. 256 bytes is generous for a single keystroke (which
+/// is typically 1–6 bytes including escape sequences) while still keeping
+/// the per-call allocation small enough to live on the stack.
+#[allow(dead_code, reason = "used by run_stdin_reader; main wiring in issue #7")]
+const READ_BUFFER_BYTES: usize = 256;
 
 /// Drives the stdin → parser → bus pipeline until either:
 ///
@@ -19,20 +23,45 @@ use tokio_util::sync::CancellationToken;
 /// - the reader returns EOF (`Ok(0)`),
 /// - or the reader returns an error (treated as EOF; the caller has
 ///   already lost the stream).
-#[allow(
-    dead_code,
-    clippy::unused_async,
-    reason = "stub for the red commit; green commit fills the body"
-)]
+// `dead_code` is allowed because the production wiring (main.rs) lands
+// in Issue #7; for now the only caller is the test module.
+#[allow(dead_code, reason = "called by tests; main wiring lands in issue #7")]
 pub async fn run_stdin_reader<R>(
-    _reader: R,
-    _bus: EventBus,
-    _cancel: CancellationToken,
-    _escape: u8,
+    mut reader: R,
+    bus: EventBus,
+    cancel: CancellationToken,
+    escape: u8,
 ) where
     R: AsyncRead + Unpin,
 {
-    todo!("run_stdin_reader — implementation lands in the green commit")
+    let mut parser = CommandKeyParser::new(escape);
+    let mut read_buf = [0_u8; READ_BUFFER_BYTES];
+    loop {
+        tokio::select! {
+            biased;
+            () = cancel.cancelled() => break,
+            res = reader.read(&mut read_buf) => match res {
+                // EOF or read error: stream is gone, nothing more to do.
+                // We don't surface read errors as Event::Error because the
+                // caller (main, joining the task handle) already sees the
+                // task complete; an extra event would just be noise.
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    for &byte in &read_buf[..n] {
+                        match parser.feed(byte) {
+                            ParseOutput::None => {}
+                            ParseOutput::Data(b) => {
+                                bus.publish(Event::TxBytes(Bytes::copy_from_slice(&[b])));
+                            }
+                            ParseOutput::Command(cmd) => {
+                                bus.publish(Event::Command(cmd));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]
