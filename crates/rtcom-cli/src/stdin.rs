@@ -14,7 +14,10 @@ use tokio_util::sync::CancellationToken;
 /// Read buffer size. 256 bytes is generous for a single keystroke (which
 /// is typically 1–6 bytes including escape sequences) while still keeping
 /// the per-call allocation small enough to live on the stack.
-#[allow(dead_code, reason = "used by run_stdin_reader; main wiring in issue #7")]
+#[allow(
+    dead_code,
+    reason = "used by run_stdin_reader; main wiring in issue #7"
+)]
 const READ_BUFFER_BYTES: usize = 256;
 
 /// Drives the stdin → parser → bus pipeline until either:
