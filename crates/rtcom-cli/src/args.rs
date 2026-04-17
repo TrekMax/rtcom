@@ -14,7 +14,10 @@ use rtcom_core::{
 #[derive(Parser, Debug, Clone)]
 #[command(
     name = "rtcom",
-    version,
+    // `RTCOM_VERSION` is computed by build.rs and looks like
+    // "0.1.0 (abc12345)" for git checkouts or just "0.1.0" for
+    // crates.io tarball builds.
+    version = env!("RTCOM_VERSION"),
     about = "Rust Terminal Communication — modern serial terminal",
     long_about = None,
 )]
