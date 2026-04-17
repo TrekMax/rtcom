@@ -30,7 +30,6 @@ pub const SYSTEM_PREFIX: &str = "*** rtcom: ";
 /// events that should reach this renderer are published. Subscribing
 /// here would race with the spawn site — broadcast channels do not
 /// replay messages sent before a subscriber attaches.
-#[allow(dead_code, reason = "wired into main in the next commit")]
 pub async fn run_terminal_renderer<W>(
     mut rx: broadcast::Receiver<Event>,
     cancel: CancellationToken,
@@ -40,37 +39,69 @@ pub async fn run_terminal_renderer<W>(
 {
     loop {
         tokio::select! {
-            biased;
+            // No `biased` — if cancel and an event race (which is
+            // exactly what Session::run does on a disconnect: it
+            // publishes DeviceDisconnected, then the loop breaks and
+            // main trips cancel), either arm may win. The drain-after
+            // loop below covers the cancel-wins case.
             () = cancel.cancelled() => break,
             msg = rx.recv() => match msg {
-                Ok(Event::RxBytes(bytes)) => {
-                    if writer.write_all(&bytes).await.is_err() {
-                        break;
+                Ok(event) => {
+                    if handle_event(&mut writer, event).await.is_err() {
+                        return;
                     }
-                    // Flush so the bytes reach the user immediately;
-                    // serial terminals are typically interactive and
-                    // line buffering would mask incoming chunks.
-                    let _ = writer.flush().await;
                 }
-                Ok(Event::SystemMessage(text)) => {
-                    if writer.write_all(SYSTEM_PREFIX.as_bytes()).await.is_err() {
-                        break;
-                    }
-                    if writer.write_all(text.as_bytes()).await.is_err() {
-                        break;
-                    }
-                    if writer.write_all(b"\n").await.is_err() {
-                        break;
-                    }
-                    let _ = writer.flush().await;
-                }
-                // Diagnostics flow through tracing; the wire stream is
-                // for serial bytes + system messages only.
-                Ok(_) | Err(broadcast::error::RecvError::Lagged(_)) => {}
-                Err(broadcast::error::RecvError::Closed) => break,
+                Err(broadcast::error::RecvError::Lagged(_)) => {}
+                Err(broadcast::error::RecvError::Closed) => return,
             }
         }
     }
+
+    // Drain anything the bus had buffered before cancel tripped. The
+    // DeviceDisconnected message in particular must reach the user —
+    // that is the primary reason this post-loop drain exists.
+    while let Ok(event) = rx.try_recv() {
+        if handle_event(&mut writer, event).await.is_err() {
+            return;
+        }
+    }
+}
+
+/// Writes a single event to the sink. Returns `Err(())` when the sink
+/// is gone; callers treat that as a signal to stop the renderer.
+async fn handle_event<W>(writer: &mut W, event: Event) -> Result<(), ()>
+where
+    W: AsyncWrite + Unpin,
+{
+    match event {
+        Event::RxBytes(bytes) => {
+            write_or_fail(writer, &bytes).await?;
+        }
+        Event::SystemMessage(text) => {
+            write_or_fail(writer, SYSTEM_PREFIX.as_bytes()).await?;
+            write_or_fail(writer, text.as_bytes()).await?;
+            write_or_fail(writer, b"\n").await?;
+        }
+        Event::DeviceDisconnected { reason } => {
+            let line = format!("{SYSTEM_PREFIX}device disconnected: {reason}\n");
+            write_or_fail(writer, line.as_bytes()).await?;
+        }
+        // Diagnostics flow through tracing; the wire stream is for
+        // serial bytes + human-readable status only.
+        _ => return Ok(()),
+    }
+    // Flush so interactive bytes and status lines reach the user
+    // immediately; line buffering on stdout would otherwise hide
+    // incoming chunks and the disconnect notice.
+    let _ = writer.flush().await;
+    Ok(())
+}
+
+async fn write_or_fail<W>(writer: &mut W, buf: &[u8]) -> Result<(), ()>
+where
+    W: AsyncWrite + Unpin,
+{
+    writer.write_all(buf).await.map_err(|_| ())
 }
 
 #[cfg(test)]
