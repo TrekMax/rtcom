@@ -8,9 +8,6 @@
 //! [`LineEndingMapper`], that covers the picocom-equivalent
 //! `crlf`/`lfcr`/`igncr`/`ignlf` rules.
 //!
-//! Stub: only the public types are defined here. Behaviour lands in the
-//! green commit.
-
 use bytes::Bytes;
 
 /// Line-ending transformation rule.
@@ -71,8 +68,29 @@ impl LineEndingMapper {
 }
 
 impl Mapper for LineEndingMapper {
-    fn map(&mut self, _bytes: &[u8]) -> Bytes {
-        todo!("LineEndingMapper::map — implementation lands in the green commit")
+    fn map(&mut self, bytes: &[u8]) -> Bytes {
+        // Fast path: identity mapping copies the slice once.
+        if matches!(self.rule, LineEnding::None) {
+            return Bytes::copy_from_slice(bytes);
+        }
+        // Worst case (Add* rules) doubles every LF/CR. Reserve a hair
+        // more than the input length to avoid the first realloc on the
+        // common case of a few line endings per chunk.
+        let mut out = Vec::with_capacity(bytes.len() + 4);
+        for &byte in bytes {
+            match (self.rule, byte) {
+                // Both Add* rules expand the matched byte to CRLF.
+                (LineEnding::AddCrToLf, b'\n') | (LineEnding::AddLfToCr, b'\r') => {
+                    out.push(b'\r');
+                    out.push(b'\n');
+                }
+                (LineEnding::DropCr, b'\r') | (LineEnding::DropLf, b'\n') => {
+                    // skip
+                }
+                _ => out.push(byte),
+            }
+        }
+        Bytes::from(out)
     }
 }
 
