@@ -55,8 +55,8 @@ fn main() -> ExitCode {
             // don't know the command-key convention will spam Ctrl-C
             // and conclude rtcom is wedged — print the actual way out.
             eprintln!(
-                "rtcom: press {} q to quit (Ctrl-C is sent to the device in raw mode)",
-                format_escape_key(cli.escape),
+                "rtcom: press {esc} ^X (or {esc} ^Q) to quit; Ctrl-C is sent to the device in raw mode",
+                esc = format_escape_key(cli.escape),
             );
         }
     }

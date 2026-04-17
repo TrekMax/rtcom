@@ -22,6 +22,9 @@ use std::time::{Duration, Instant};
 /// `default_value = "^A"` on `Cli::escape`). Tests rely on the
 /// production default; if it changes here, change it there too.
 const ESC: u8 = 0x01;
+/// `^X` — picocom-style "terminate" key; one of the two byte
+/// sequences `CommandKeyParser` accepts as Quit after the escape.
+const CTRL_X: u8 = 0x18;
 
 const RTCOM_BIN: &str = env!("CARGO_BIN_EXE_rtcom");
 
@@ -173,7 +176,9 @@ fn quit_command_via_stdin_exits_with_zero() {
 
     {
         let mut stdin = rtcom.stdin.take().expect("stdin");
-        stdin.write_all(&[ESC, b'q']).expect("write quit sequence");
+        stdin
+            .write_all(&[ESC, CTRL_X])
+            .expect("write quit sequence");
     }
 
     let exit = wait_with_timeout(&mut rtcom, STEP);
@@ -210,7 +215,7 @@ fn external_writes_appear_on_rtcom_stdout() {
     // Tell rtcom to quit so wait() does not hang.
     {
         let mut stdin = rtcom.stdin.take().expect("stdin");
-        let _ = stdin.write_all(&[ESC, b'q']);
+        let _ = stdin.write_all(&[ESC, CTRL_X]);
     }
     let exit = wait_with_timeout(&mut rtcom, STEP);
     assert_eq!(exit, Some(0));
@@ -238,7 +243,7 @@ fn rtcom_stdin_bytes_reach_external_end() {
     {
         let mut stdin = rtcom.stdin.take().expect("stdin");
         stdin.write_all(b"ping").expect("write ping");
-        stdin.write_all(&[ESC, b'q']).expect("write quit");
+        stdin.write_all(&[ESC, CTRL_X]).expect("write quit");
     }
 
     let received = received_handle.join().expect("read thread join");

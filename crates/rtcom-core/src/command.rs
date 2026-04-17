@@ -100,7 +100,11 @@ impl CommandKeyParser {
         match byte {
             ESC_KEY => ParseOutput::None,
             b'?' | b'h' => ParseOutput::Command(Command::Help),
-            b'q' | b'x' => ParseOutput::Command(Command::Quit),
+            // Picocom convention: Quit is bound to ^Q (0x11) and ^X
+            // (0x18) — control bytes — not the plain letters. That
+            // frees the letters to be sent to the wire as data without
+            // an extra escape dance.
+            CTRL_Q | CTRL_X => ParseOutput::Command(Command::Quit),
             b'c' => ParseOutput::Command(Command::ShowConfig),
             b't' => ParseOutput::Command(Command::ToggleDtr),
             b'g' => ParseOutput::Command(Command::ToggleRts),
@@ -131,6 +135,10 @@ impl CommandKeyParser {
 }
 
 const ESC_KEY: u8 = 0x1b;
+/// Ctrl-Q. Picocom's "quit" key.
+const CTRL_Q: u8 = 0x11;
+/// Ctrl-X. Picocom's "terminate" key.
+const CTRL_X: u8 = 0x18;
 
 #[cfg(test)]
 mod tests {
@@ -310,7 +318,8 @@ mod tests {
     fn pass_through_resumes_after_command() {
         let mut p = parser();
         p.feed(ESC);
-        assert_eq!(p.feed(b'q'), ParseOutput::Command(Command::Quit));
+        // ^X (0x18) is one of the picocom-style quit keys.
+        assert_eq!(p.feed(0x18), ParseOutput::Command(Command::Quit));
         assert_eq!(p.feed(b'a'), ParseOutput::Data(b'a'));
     }
 
