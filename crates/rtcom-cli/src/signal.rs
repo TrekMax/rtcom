@@ -12,18 +12,12 @@
 //! - any error -> `1` (set by `main`)
 //! - killed by signal `N` -> `128 + N` (e.g. SIGINT -> 130)
 //!
-//! Stub: pure helpers and the public type are in place; the stateful
-//! listener body lands in the next commit.
+// Public symbols in this module are exercised by tests now and by
+// main.rs once Issue #10's wiring commit lands; bin build has no
+// callers in between.
+#![allow(dead_code, reason = "wired into main.rs in the follow-up commit")]
 
-// All public items in this module are exercised by tests in this commit
-// and by main.rs in the follow-up wiring commit; the bin build has no
-// callers yet.
-#![allow(
-    dead_code,
-    reason = "main.rs wiring lands in a follow-up commit; tests already cover these"
-)]
-
-use std::sync::atomic::AtomicI32;
+use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::Arc;
 
 use tokio_util::sync::CancellationToken;
@@ -78,15 +72,28 @@ impl SignalListener {
     /// Returns the underlying [`io::Error`](std::io::Error) if any
     /// per-signal subscription fails (typically because the runtime is
     /// not multi-thread or the OS rejected the registration).
-    pub fn install(_cancel: CancellationToken) -> std::io::Result<Self> {
-        todo!("SignalListener::install — implementation lands in the next commit")
+    pub fn install(cancel: CancellationToken) -> std::io::Result<Self> {
+        let received = Arc::new(AtomicI32::new(0));
+
+        #[cfg(unix)]
+        install_unix(&received, &cancel)?;
+        #[cfg(not(unix))]
+        install_windows(&received, &cancel)?;
+
+        // The token is consumed (and cloned into the listener tasks)
+        // even when no signals fire. Drop it explicitly so the
+        // signature stays "pass by value" — clearer at the call site
+        // than handing in a borrow that we then have to clone anyway.
+        drop(cancel);
+
+        Ok(Self { received })
     }
 
     /// Returns the signum of the first signal that arrived, or `None`
     /// if none did.
     #[must_use]
     pub fn received(&self) -> Option<i32> {
-        let n = self.received.load(std::sync::atomic::Ordering::SeqCst);
+        let n = self.received.load(Ordering::SeqCst);
         if n == 0 {
             None
         } else {
@@ -100,6 +107,92 @@ impl SignalListener {
     pub fn exit_code(&self) -> i32 {
         exit_code_from_signal(self.received())
     }
+}
+
+#[cfg(unix)]
+fn install_unix(received: &Arc<AtomicI32>, cancel: &CancellationToken) -> std::io::Result<()> {
+    use tokio::signal::unix::SignalKind;
+
+    spawn_unix_listener(SignalKind::interrupt(), SIGINT_NUM, received, cancel)?;
+    spawn_unix_listener(SignalKind::terminate(), SIGTERM_NUM, received, cancel)?;
+    spawn_unix_listener(SignalKind::hangup(), SIGHUP_NUM, received, cancel)?;
+    spawn_winch_logger()?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn spawn_unix_listener(
+    kind: tokio::signal::unix::SignalKind,
+    signum: i32,
+    received: &Arc<AtomicI32>,
+    cancel: &CancellationToken,
+) -> std::io::Result<()> {
+    let mut sig = tokio::signal::unix::signal(kind)?;
+    let received = Arc::clone(received);
+    let cancel = cancel.clone();
+    tokio::spawn(async move {
+        // Loop so subsequent signals are still observed (e.g. user
+        // hits Ctrl-C twice — the second one is just logged here, but
+        // we never want to leave a dangling listener).
+        loop {
+            if sig.recv().await.is_none() {
+                // Stream closed: shutting down, nothing more to do.
+                break;
+            }
+            // First signal wins the "what killed us" race.
+            let _ = received.compare_exchange(0, signum, Ordering::SeqCst, Ordering::SeqCst);
+            tracing::info!(signal = signal_name(signum), "received signal");
+            cancel.cancel();
+        }
+    });
+    Ok(())
+}
+
+#[cfg(unix)]
+fn spawn_winch_logger() -> std::io::Result<()> {
+    let mut sig = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::window_change())?;
+    tokio::spawn(async move {
+        while sig.recv().await.is_some() {
+            // v0.1 only logs; v1.0+'s TUI will react.
+            tracing::debug!("SIGWINCH (terminal resize)");
+        }
+    });
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn install_windows(received: &Arc<AtomicI32>, cancel: &CancellationToken) -> std::io::Result<()> {
+    use tokio::signal::windows::{ctrl_break, ctrl_c};
+
+    let mut intr = ctrl_c()?;
+    {
+        let received = Arc::clone(received);
+        let cancel = cancel.clone();
+        tokio::spawn(async move {
+            while intr.recv().await.is_some() {
+                let _ =
+                    received.compare_exchange(0, SIGINT_NUM, Ordering::SeqCst, Ordering::SeqCst);
+                tracing::info!(signal = "Ctrl-C", "received signal");
+                cancel.cancel();
+            }
+        });
+    }
+
+    let mut brk = ctrl_break()?;
+    {
+        let received = Arc::clone(received);
+        let cancel = cancel.clone();
+        tokio::spawn(async move {
+            while brk.recv().await.is_some() {
+                let _ =
+                    received.compare_exchange(0, SIGTERM_NUM, Ordering::SeqCst, Ordering::SeqCst);
+                tracing::info!(signal = "Ctrl-Break", "received signal");
+                cancel.cancel();
+            }
+        });
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
