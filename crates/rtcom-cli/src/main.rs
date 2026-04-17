@@ -9,6 +9,7 @@
 #![forbid(unsafe_code)]
 
 mod args;
+mod stdin;
 mod tty;
 
 use std::io::{self, Write};
