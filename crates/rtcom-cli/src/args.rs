@@ -229,8 +229,14 @@ pub enum CliLineEnding {
 }
 
 impl From<CliLineEnding> for LineEnding {
-    fn from(_v: CliLineEnding) -> Self {
-        todo!("CliLineEnding -> LineEnding mapping lands in the green commit")
+    fn from(v: CliLineEnding) -> Self {
+        match v {
+            CliLineEnding::None => Self::None,
+            CliLineEnding::Crlf => Self::AddCrToLf,
+            CliLineEnding::Lfcr => Self::AddLfToCr,
+            CliLineEnding::Igncr => Self::DropCr,
+            CliLineEnding::Ignlf => Self::DropLf,
+        }
     }
 }
 
