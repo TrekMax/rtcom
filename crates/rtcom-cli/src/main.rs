@@ -19,6 +19,7 @@
 mod args;
 mod signal;
 mod stdin;
+mod terminal;
 mod tty;
 
 use std::io::{self, Write};
