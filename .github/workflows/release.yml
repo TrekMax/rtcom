@@ -1,0 +1,242 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  # softprops/action-gh-release needs `contents: write` to upload
+  # release assets and create the GitHub Release page.
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            artifact: rtcom
+            asset_name: rtcom-x86_64-unknown-linux-gnu
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            artifact: rtcom
+            asset_name: rtcom-aarch64-unknown-linux-gnu
+            cross: true
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            artifact: rtcom
+            asset_name: rtcom-x86_64-apple-darwin
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            artifact: rtcom
+            asset_name: rtcom-aarch64-apple-darwin
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            artifact: rtcom.exe
+            asset_name: rtcom-x86_64-pc-windows-msvc.exe
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.85"
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Install libudev (Linux native)
+        if: "matrix.os == 'ubuntu-latest' && !matrix.cross"
+        run: sudo apt-get update && sudo apt-get install -y libudev-dev pkg-config
+
+      - name: Install cross (cross-compile targets)
+        if: matrix.cross
+        run: cargo install cross --version 0.2.5 --locked
+
+      - name: Build (native)
+        if: "!matrix.cross"
+        run: cargo build --release -p rtcom-cli --target ${{ matrix.target }}
+
+      - name: Build (cross)
+        if: matrix.cross
+        run: cross build --release -p rtcom-cli --target ${{ matrix.target }}
+
+      - name: Stage artifact
+        shell: bash
+        run: cp target/${{ matrix.target }}/release/${{ matrix.artifact }} ${{ matrix.asset_name }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset_name }}
+          path: ${{ matrix.asset_name }}
+
+  macos-universal:
+    name: macOS universal binary
+    needs: build
+    runs-on: macos-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: rtcom-x86_64-apple-darwin
+      - uses: actions/download-artifact@v4
+        with:
+          name: rtcom-aarch64-apple-darwin
+
+      - name: lipo x86_64 + aarch64 -> universal
+        run: |
+          lipo -create rtcom-x86_64-apple-darwin rtcom-aarch64-apple-darwin \
+               -output rtcom-universal-apple-darwin
+          chmod +x rtcom-universal-apple-darwin
+          file rtcom-universal-apple-darwin
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rtcom-universal-apple-darwin
+          path: rtcom-universal-apple-darwin
+
+  release:
+    name: GitHub release
+    needs: [build, macos-universal]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        # Need full history to compare against previous tag for the
+        # commit-log fallback when CHANGELOG has no matching section.
+        with:
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Stage assets + checksums
+        run: |
+          mkdir -p release
+          find artifacts -type f -exec cp {} release/ \;
+          cd release
+          # Sort so the file is reproducible across reruns of the
+          # same tag.
+          sha256sum * | sort > checksums-sha256.txt
+          ls -la
+
+      - name: Build release notes
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          # Try CHANGELOG.md section first (Keep a Changelog format:
+          # `## [VERSION]` ... up to the next `## ` heading).
+          VERSION="${TAG_NAME#v}"
+          NOTES_BODY=""
+          if [ -f CHANGELOG.md ]; then
+            NOTES_BODY=$(awk -v ver="$VERSION" '
+              $0 ~ "^## \\[" ver "\\]" { capture = 1; next }
+              capture && /^## / { exit }
+              capture { print }
+            ' CHANGELOG.md | sed -e '/./,$!d')
+          fi
+
+          # Fallback: categorised commit log between previous tag and
+          # this one.
+          if [ -z "$(printf '%s' "$NOTES_BODY" | tr -d '[:space:]')" ]; then
+            PREV_TAG=$(git tag --sort=-v:refname | grep -E '^v' | grep -v "^${TAG_NAME}\$" | head -n1 || true)
+            if [ -z "$PREV_TAG" ]; then
+              RANGE="$TAG_NAME"
+            else
+              RANGE="${PREV_TAG}..${TAG_NAME}"
+            fi
+            FEATS=""; FIXES=""; DOCS=""; OTHERS=""
+            while IFS= read -r line; do
+              [ -z "$line" ] && continue
+              HASH=$(echo "$line" | cut -d' ' -f1)
+              MSG=$(echo "$line" | cut -d' ' -f2-)
+              case "$MSG" in
+                feat*)  FEATS="${FEATS}- ${MSG} (\`${HASH}\`)"$'\n' ;;
+                fix*)   FIXES="${FIXES}- ${MSG} (\`${HASH}\`)"$'\n' ;;
+                docs*)  DOCS="${DOCS}- ${MSG} (\`${HASH}\`)"$'\n' ;;
+                chore*|test*|refactor*|ci*|build*) ;;  # noise
+                *)      OTHERS="${OTHERS}- ${MSG} (\`${HASH}\`)"$'\n' ;;
+              esac
+            done < <(git log --oneline "$RANGE")
+            {
+              [ -n "$FEATS"  ] && printf "### New features\n%s\n" "$FEATS"
+              [ -n "$FIXES"  ] && printf "### Bug fixes\n%s\n"   "$FIXES"
+              [ -n "$DOCS"   ] && printf "### Documentation\n%s\n" "$DOCS"
+              [ -n "$OTHERS" ] && printf "### Other\n%s\n"        "$OTHERS"
+            } > /tmp/notes_body.md
+            NOTES_BODY=$(cat /tmp/notes_body.md)
+          fi
+
+          # Compose final notes.
+          {
+            printf "## %s\n\n" "$TAG_NAME"
+            printf "%s\n\n" "$NOTES_BODY"
+            printf "## Installation\n\n"
+            printf '```sh\ncargo install rtcom-cli --locked\n```\n\n'
+            printf "Or download a binary for your platform:\n\n"
+            printf "| Platform | Architecture | Asset |\n"
+            printf "|----------|--------------|-------|\n"
+            printf "| Linux | x86_64 | \`rtcom-x86_64-unknown-linux-gnu\` |\n"
+            printf "| Linux | aarch64 | \`rtcom-aarch64-unknown-linux-gnu\` |\n"
+            printf "| macOS | Intel | \`rtcom-x86_64-apple-darwin\` |\n"
+            printf "| macOS | Apple Silicon | \`rtcom-aarch64-apple-darwin\` |\n"
+            printf "| macOS | Universal | \`rtcom-universal-apple-darwin\` |\n"
+            printf "| Windows | x86_64 | \`rtcom-x86_64-pc-windows-msvc.exe\` |\n\n"
+            printf "<details>\n<summary>SHA-256 checksums</summary>\n\n"
+            printf '```\n'
+            cat release/checksums-sha256.txt
+            printf '```\n</details>\n'
+          } > release_notes.md
+
+          echo "----- generated release notes -----"
+          cat release_notes.md
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          draft: false
+          body_path: release_notes.md
+          files: release/*
+
+  publish-crates:
+    name: Publish to crates.io
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.85"
+
+      - name: Install libudev
+        # cargo publish runs `cargo package` which compiles the crate;
+        # rtcom-core needs libudev to compile.
+        run: sudo apt-get update && sudo apt-get install -y libudev-dev pkg-config
+
+      - name: Publish rtcom-core
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          cargo publish -p rtcom-core --no-verify \
+            || echo "::warning::rtcom-core publish skipped (already on crates.io?)"
+
+      - name: Wait for index propagation
+        # crates.io's sparse index is fast but not instant. Cargo on the
+        # next step needs the just-published version to be visible.
+        run: sleep 45
+
+      - name: Publish rtcom-cli
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          cargo publish -p rtcom-cli --no-verify \
+            || echo "::warning::rtcom-cli publish skipped (already on crates.io?)"
