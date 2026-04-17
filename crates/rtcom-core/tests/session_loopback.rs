@@ -4,7 +4,12 @@
 //!
 //! Unix-only because [`SerialPortDevice::pair`] is not available on Windows.
 
-#![cfg(unix)]
+// Linux-only for the same reason as pty_roundtrip.rs: macOS PTYs
+// behave subtly differently and the Session loop's read/write timing
+// assumptions don't hold there. Linux gives canonical PTY semantics
+// that match real serial devices closely enough for the tests to
+// stay deterministic.
+#![cfg(target_os = "linux")]
 
 use std::time::Duration;
 

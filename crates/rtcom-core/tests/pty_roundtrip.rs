@@ -1,10 +1,13 @@
 //! Integration test: open a PTY pair via [`SerialPortDevice::pair`],
 //! write bytes on one end, verify the other end reads them back.
 //!
-//! Unix-only — [`tokio_serial::SerialStream::pair`] is not available on
-//! Windows. Windows coverage arrives in v0.8 with the native backend.
+//! Linux-only. macOS PTY behaviour diverges enough from Linux that
+//! `set_baud_rate` may reject and bidirectional reads can stall — both
+//! observed on `macos-latest` GitHub runners. The Linux PTY path is
+//! the canonical assumption for this suite; macOS coverage waits on
+//! a real-device test plan, Windows on the v0.8 native backend.
 
-#![cfg(unix)]
+#![cfg(target_os = "linux")]
 
 use rtcom_core::{SerialConfig, SerialDevice, SerialPortDevice};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};

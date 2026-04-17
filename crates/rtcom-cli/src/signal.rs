@@ -21,6 +21,12 @@ use tokio_util::sync::CancellationToken;
 /// `kill -2 <pid>`.
 pub const SIGINT_NUM: i32 = 2;
 /// `kill -HUP` (hang-up). Sent when the controlling terminal closes.
+/// Unix-only; allowed dead on Windows where the listener does not
+/// register a SIGHUP equivalent.
+#[allow(
+    dead_code,
+    reason = "consumed by spawn_unix_listener; tests use it cross-platform"
+)]
 pub const SIGHUP_NUM: i32 = 1;
 /// `kill -TERM` (default `kill`).
 pub const SIGTERM_NUM: i32 = 15;
@@ -38,7 +44,12 @@ pub const fn exit_code_from_signal(signum: Option<i32>) -> i32 {
 }
 
 /// Diagnostic name for a signal number. Returns `"unknown"` for signals
-/// the listener does not handle.
+/// the listener does not handle. Used by the Unix listener tasks; the
+/// Windows path uses string literals directly.
+#[allow(
+    dead_code,
+    reason = "called by spawn_unix_listener; tests use it cross-platform"
+)]
 #[must_use]
 pub const fn signal_name(signum: i32) -> &'static str {
     match signum {
