@@ -49,6 +49,16 @@ fn main() -> ExitCode {
 
     if !cli.quiet {
         print_config_summary(&cli);
+        if io::stdin().is_terminal() {
+            // Raw mode swallows Ctrl-C (it is forwarded to the wire as
+            // a regular 0x03 byte, matching picocom/tio). Users who
+            // don't know the command-key convention will spam Ctrl-C
+            // and conclude rtcom is wedged — print the actual way out.
+            eprintln!(
+                "rtcom: press {} q to quit (Ctrl-C is sent to the device in raw mode)",
+                format_escape_key(cli.escape),
+            );
+        }
     }
 
     let lock = match UucpLock::acquire(&cli.device) {
@@ -127,6 +137,13 @@ async fn async_main(cli: Cli) -> i32 {
         }
     };
 
+    // Keep a clone of the cancel token so main can trip it *after*
+    // session.run returns. Without this, a device disconnect ends
+    // Session cleanly but leaves stdin (blocked on a read) and the
+    // renderer (blocked on recv) running forever — the whole process
+    // hangs with no feedback.
+    let shutdown = cancel.clone();
+
     let session_handle = tokio::spawn(session.run());
     let renderer_handle = tokio::spawn(run_terminal_renderer(
         renderer_rx,
@@ -140,14 +157,18 @@ async fn async_main(cli: Cli) -> i32 {
         cli.escape,
     ));
 
-    // The session loop terminates either on a Quit command (dispatcher
-    // cancels the token) or on a fatal I/O error. The signal handlers
-    // trip the same token. Stdin and the renderer observe it too and
-    // wind down on their own.
+    // The session loop terminates on a Quit command, a fatal I/O
+    // error (device disconnect), or a signal. We own the "session is
+    // done" authority here — trip cancel so stdin / renderer unwind
+    // through the same code path regardless of which trigger fired.
     if let Err(err) = session_handle.await {
         tracing::error!(error = %err, "session task panicked");
+        shutdown.cancel();
+        let _ = renderer_handle.await;
+        let _ = stdin_handle.await;
         return 1;
     }
+    shutdown.cancel();
     let _ = renderer_handle.await;
     let _ = stdin_handle.await;
 
@@ -186,6 +207,16 @@ fn print_config_summary(cli: &Cli) {
     );
 }
 
+/// Pretty-prints an escape byte in the same caret notation `--escape`
+/// accepts: `^T` for 0x14, `'a'` for a printable ASCII character.
+fn format_escape_key(b: u8) -> String {
+    match b {
+        0..=0x1f => format!("^{}", char::from(b + 0x40)),
+        0x7f => "^?".into(),
+        _ => format!("'{}'", char::from(b)),
+    }
+}
+
 const fn parity_letter(p: rtcom_core::Parity) -> char {
     match p {
         rtcom_core::Parity::None => 'N',
@@ -200,5 +231,28 @@ const fn stop_bits_number(s: rtcom_core::StopBits) -> u8 {
     match s {
         rtcom_core::StopBits::One => 1,
         rtcom_core::StopBits::Two => 2,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::format_escape_key;
+
+    #[test]
+    fn format_escape_key_control_char() {
+        assert_eq!(format_escape_key(0x14), "^T");
+        assert_eq!(format_escape_key(0x01), "^A");
+        assert_eq!(format_escape_key(0x00), "^@");
+    }
+
+    #[test]
+    fn format_escape_key_printable() {
+        assert_eq!(format_escape_key(b'a'), "'a'");
+        assert_eq!(format_escape_key(b'?'), "'?'");
+    }
+
+    #[test]
+    fn format_escape_key_del() {
+        assert_eq!(format_escape_key(0x7f), "^?");
     }
 }
