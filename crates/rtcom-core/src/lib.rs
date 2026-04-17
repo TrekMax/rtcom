@@ -27,12 +27,14 @@
 
 #![forbid(unsafe_code)]
 
+pub mod command;
 pub mod config;
 pub mod device;
 pub mod error;
 pub mod event;
 pub mod session;
 
+pub use command::{Command, CommandKeyParser, ParseOutput};
 pub use config::{
     DataBits, FlowControl, ModemStatus, Parity, SerialConfig, StopBits, DEFAULT_READ_TIMEOUT,
 };
