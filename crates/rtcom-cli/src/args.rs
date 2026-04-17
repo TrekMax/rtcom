@@ -6,7 +6,9 @@
 
 use clap::{ArgAction, Parser, ValueEnum};
 
-use rtcom_core::{DataBits, FlowControl, Parity, SerialConfig, StopBits, DEFAULT_READ_TIMEOUT};
+use rtcom_core::{
+    DataBits, FlowControl, LineEnding, Parity, SerialConfig, StopBits, DEFAULT_READ_TIMEOUT,
+};
 
 /// Parsed `rtcom` command-line invocation.
 #[derive(Parser, Debug, Clone)]
@@ -63,6 +65,34 @@ pub struct Cli {
         value_name = "MODE",
     )]
     pub flow: CliFlow,
+
+    /// Outbound line-ending mapping. See [`CliLineEnding`] for the rules.
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = CliLineEnding::None,
+        value_name = "RULE",
+    )]
+    pub omap: CliLineEnding,
+
+    /// Inbound line-ending mapping. See [`CliLineEnding`] for the rules.
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = CliLineEnding::None,
+        value_name = "RULE",
+    )]
+    pub imap: CliLineEnding,
+
+    /// Echo line-ending mapping. Accepted for parity with picocom; the
+    /// echo path itself wires up in a later issue.
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = CliLineEnding::None,
+        value_name = "RULE",
+    )]
+    pub emap: CliLineEnding,
 
     /// Do not toggle DTR on startup (suppress the MCU-reset pulse).
     #[arg(long = "no-reset")]
@@ -179,6 +209,28 @@ impl From<CliParity> for Parity {
             CliParity::Mark => Self::Mark,
             CliParity::Space => Self::Space,
         }
+    }
+}
+
+/// CLI-facing line-ending mapping enum (used by `--omap`, `--imap`,
+/// `--emap`). Names follow the picocom convention.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
+pub enum CliLineEnding {
+    /// No transformation (default).
+    None,
+    /// LF → CRLF (picocom `crlf`).
+    Crlf,
+    /// CR → CRLF (picocom `lfcr`).
+    Lfcr,
+    /// Drop CR (picocom `igncr`).
+    Igncr,
+    /// Drop LF (picocom `ignlf`).
+    Ignlf,
+}
+
+impl From<CliLineEnding> for LineEnding {
+    fn from(_v: CliLineEnding) -> Self {
+        todo!("CliLineEnding -> LineEnding mapping lands in the green commit")
     }
 }
 
@@ -346,6 +398,38 @@ mod tests {
         assert!(Cli::try_parse_from(["rtcom", "/dev/x", "--escape", ""]).is_err());
         assert!(Cli::try_parse_from(["rtcom", "/dev/x", "--escape", "abc"]).is_err());
         assert!(Cli::try_parse_from(["rtcom", "/dev/x", "--escape", "^!"]).is_err());
+    }
+
+    #[test]
+    fn line_ending_options_default_to_none() {
+        let cli = Cli::parse_from(["rtcom", "/dev/x"]);
+        assert_eq!(cli.omap, CliLineEnding::None);
+        assert_eq!(cli.imap, CliLineEnding::None);
+        assert_eq!(cli.emap, CliLineEnding::None);
+    }
+
+    #[test]
+    fn omap_imap_emap_parse_each_value() {
+        let cli = Cli::parse_from([
+            "rtcom", "/dev/x", "--omap", "crlf", "--imap", "igncr", "--emap", "lfcr",
+        ]);
+        assert_eq!(cli.omap, CliLineEnding::Crlf);
+        assert_eq!(cli.imap, CliLineEnding::Igncr);
+        assert_eq!(cli.emap, CliLineEnding::Lfcr);
+    }
+
+    #[test]
+    fn rejects_invalid_line_ending_value() {
+        assert!(Cli::try_parse_from(["rtcom", "/dev/x", "--omap", "weird"]).is_err());
+    }
+
+    #[test]
+    fn cli_line_ending_projects_to_core_line_ending() {
+        assert_eq!(LineEnding::from(CliLineEnding::None), LineEnding::None);
+        assert_eq!(LineEnding::from(CliLineEnding::Crlf), LineEnding::AddCrToLf);
+        assert_eq!(LineEnding::from(CliLineEnding::Lfcr), LineEnding::AddLfToCr);
+        assert_eq!(LineEnding::from(CliLineEnding::Igncr), LineEnding::DropCr);
+        assert_eq!(LineEnding::from(CliLineEnding::Ignlf), LineEnding::DropLf);
     }
 
     #[test]
