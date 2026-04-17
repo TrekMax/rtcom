@@ -12,11 +12,6 @@
 //! - any error -> `1` (set by `main`)
 //! - killed by signal `N` -> `128 + N` (e.g. SIGINT -> 130)
 //!
-// Public symbols in this module are exercised by tests now and by
-// main.rs once Issue #10's wiring commit lands; bin build has no
-// callers in between.
-#![allow(dead_code, reason = "wired into main.rs in the follow-up commit")]
-
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::Arc;
 
