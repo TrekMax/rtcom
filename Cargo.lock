@@ -931,6 +931,7 @@ dependencies = [
  "ratatui",
  "rtcom-config",
  "rtcom-core",
+ "tempfile",
  "tokio",
  "tokio-util",
  "tracing",

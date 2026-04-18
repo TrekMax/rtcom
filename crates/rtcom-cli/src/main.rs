@@ -111,7 +111,7 @@ fn main() -> ExitCode {
         }
     };
 
-    let exit_code = runtime.block_on(async_main(cli, profile, serial_cfg));
+    let exit_code = runtime.block_on(async_main(cli, profile, profile_path, serial_cfg));
 
     drop(lock);
 
@@ -119,7 +119,12 @@ fn main() -> ExitCode {
     ExitCode::from(exit_code as u8)
 }
 
-async fn async_main(cli: Cli, profile: Profile, serial_cfg: rtcom_core::SerialConfig) -> i32 {
+async fn async_main(
+    cli: Cli,
+    profile: Profile,
+    profile_path: Option<std::path::PathBuf>,
+    serial_cfg: rtcom_core::SerialConfig,
+) -> i32 {
     let mut device = match SerialPortDevice::open(&cli.device, serial_cfg) {
         Ok(d) => d,
         Err(err) => {
@@ -188,7 +193,12 @@ async fn async_main(cli: Cli, profile: Profile, serial_cfg: rtcom_core::SerialCo
     // Drive the TUI until the user quits, a signal cancels, or the
     // session's bus closes. On any of these, the TUI returns and the
     // shutdown path below unwinds the spawned tasks.
-    let tui_result = rtcom_tui::run(app, bus, tui_rx, cancel.clone()).await;
+    //
+    // The TUI takes ownership of the already-loaded `profile` + its
+    // `profile_path` so save-flavored dialog actions
+    // (ApplyAndSave / WriteProfile / ReadProfile / ...) can persist
+    // back to disk without re-reading the profile a second time.
+    let tui_result = rtcom_tui::run(app, bus, tui_rx, cancel.clone(), profile_path, profile).await;
 
     // Cancel either a running session (TUI returned first because
     // the user quit) or nothing (session already returned, tripping

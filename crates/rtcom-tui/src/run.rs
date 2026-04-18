@@ -12,14 +12,21 @@
 //!
 //! T17 wired the live-apply / line-toggle / send-break actions through
 //! the bus into the session. T18 extends this with the save-flavored
-//! (`ApplyAndSave`, `WriteProfile`, `ReadProfile`, ...) actions.
+//! (`ApplyAndSave`, `WriteProfile`, `ReadProfile`, ...) actions — these
+//! mutate `Profile` in memory, persist it to TOML via
+//! [`rtcom_config::write`], and publish
+//! [`Event::ProfileSaved`] / [`Event::ProfileLoadFailed`] so T19's toast
+//! layer can surface the outcome to the user.
 
 use std::io;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use crossterm::event::{Event as CtEvent, EventStream, KeyEvent, KeyEventKind};
 use futures::StreamExt;
 use ratatui::{backend::CrosstermBackend, Terminal};
+use rtcom_config::Profile;
 use rtcom_core::{
     command::Command, Event, EventBus, ModemLineSnapshot, Parity, SerialConfig, StopBits,
 };
@@ -30,6 +37,9 @@ use crate::{
     app::TuiApp,
     input::Dispatch,
     modal::DialogAction,
+    profile_bridge::{
+        line_endings_from_profile, serial_config_to_section, serial_section_to_config,
+    },
     terminal::{AltScreenGuard, RawModeGuard},
 };
 
@@ -40,15 +50,26 @@ use crate::{
 ///
 /// # Parameters
 ///
-/// - `app`       — the prepared [`TuiApp`]; caller seeds device
+/// - `app`          — the prepared [`TuiApp`]; caller seeds device
 ///   summary, initial `SerialConfig`, line endings, modem lines, and
 ///   modal style before handing in.
-/// - `bus`       — the shared [`EventBus`], used to publish
-///   [`Event::TxBytes`] for keystrokes.
-/// - `bus_rx`    — a pre-subscribed bus receiver; subscribe before
+/// - `bus`          — the shared [`EventBus`], used to publish
+///   [`Event::TxBytes`] for keystrokes and
+///   [`Event::ProfileSaved`] / [`Event::ProfileLoadFailed`] for
+///   profile-IO outcomes.
+/// - `bus_rx`       — a pre-subscribed bus receiver; subscribe before
 ///   spawning the session task so no events are missed.
-/// - `cancel`    — the shared [`CancellationToken`]. Tripping it (via
-///   signal, session exit, or [`Dispatch::Quit`]) unwinds the loop.
+/// - `cancel`       — the shared [`CancellationToken`]. Tripping it
+///   (via signal, session exit, or [`Dispatch::Quit`]) unwinds the
+///   loop.
+/// - `profile_path` — where to read/write the profile TOML when the
+///   user triggers a save-flavored dialog action. `None` when no path
+///   is discoverable (tests, `$HOME`-less CI); save actions become
+///   no-ops + `tracing::warn` in that case.
+/// - `profile`      — the currently-loaded profile, owned by the run
+///   loop. Mutated in place when `ApplyAndSave` / `ApplyModalStyleAndSave`
+///   / `ReadProfile` rewrite sections; persisted on disk through
+///   [`rtcom_config::write`].
 ///
 /// # Errors
 ///
@@ -60,6 +81,8 @@ pub async fn run(
     bus: EventBus,
     mut bus_rx: broadcast::Receiver<Event>,
     cancel: CancellationToken,
+    profile_path: Option<PathBuf>,
+    mut profile: Profile,
 ) -> Result<()> {
     // RAII: enter raw mode + alt screen. Both restore on drop, even
     // if the terminal setup below or the loop body returns Err — the
@@ -91,7 +114,14 @@ pub async fn run(
                         // single physical keystroke does not produce
                         // two bytes on the wire.
                         if key.kind == KeyEventKind::Press
-                            && handle_key_event(key, &mut app, &bus, &cancel)
+                            && handle_key_event(
+                                key,
+                                &mut app,
+                                &bus,
+                                &cancel,
+                                profile_path.as_deref(),
+                                &mut profile,
+                            )
                         {
                             break;
                         }
@@ -137,6 +167,8 @@ fn handle_key_event(
     app: &mut TuiApp,
     bus: &EventBus,
     cancel: &CancellationToken,
+    profile_path: Option<&Path>,
+    profile: &mut Profile,
 ) -> bool {
     match app.handle_key(key) {
         Dispatch::TxBytes(bytes) => {
@@ -149,7 +181,7 @@ fn handle_key_event(
             true
         }
         Dispatch::Action(action) => {
-            apply_dialog_action(&action, app, bus);
+            apply_dialog_action(&action, app, bus, profile_path, profile);
             false
         }
     }
@@ -161,15 +193,23 @@ fn handle_key_event(
 ///   toggles, break), publish `Event::Command(cmd)` on the bus and let
 ///   the session dispatch it.
 /// - For `ApplyModalStyleLive`, update the TUI's local cached style so
-///   subsequent renders pick it up. Persisting to profile is T18's job.
+///   subsequent renders pick it up.
 /// - For save-flavored actions (`ApplyAndSave`, `WriteProfile`,
-///   `ReadProfile`, `ApplyModalStyleAndSave`), log a warn with a T18
-///   TODO — they land in the next task.
+///   `ReadProfile`, `ApplyModalStyleAndSave`), mutate the in-memory
+///   [`Profile`], persist via [`rtcom_config::write`], and publish
+///   [`Event::ProfileSaved`] / [`Event::ProfileLoadFailed`] so T19's
+///   toast layer can surface the outcome.
 /// - For line-ending changes (`ApplyLineEndingsLive` /
 ///   `ApplyLineEndingsAndSave`), log a warn pointing at v0.2.1 which
 ///   introduces the `Arc<Mutex<Mapper>>` refactor needed to swap the
 ///   mapper at runtime.
-fn apply_dialog_action(action: &DialogAction, app: &mut TuiApp, bus: &EventBus) {
+fn apply_dialog_action(
+    action: &DialogAction,
+    app: &mut TuiApp,
+    bus: &EventBus,
+    profile_path: Option<&Path>,
+    profile: &mut Profile,
+) {
     // Local-only action: no Command translation, just update the cache.
     if let DialogAction::ApplyModalStyleLive(style) = action {
         app.set_modal_style(*style);
@@ -184,13 +224,28 @@ fn apply_dialog_action(action: &DialogAction, app: &mut TuiApp, bus: &EventBus) 
 
     match action {
         DialogAction::ApplyLineEndingsLive(_) | DialogAction::ApplyLineEndingsAndSave(_) => {
+            // v0.2.1 ships the Arc<Mutex<Mapper>> refactor that lets
+            // the session swap mappers at runtime. Until then, line-
+            // ending changes require a restart.
             tracing::warn!("live line-ending change not yet supported; restart rtcom to apply");
         }
-        DialogAction::ApplyAndSave(_)
-        | DialogAction::ApplyModalStyleAndSave(_)
-        | DialogAction::WriteProfile
-        | DialogAction::ReadProfile => {
-            tracing::warn!(?action, "save-flavored action: pending T18");
+        DialogAction::ApplyAndSave(cfg) => {
+            // Two-step: apply live, then persist the new serial section.
+            bus.publish(Event::Command(Command::ApplyConfig(*cfg)));
+            profile.serial = serial_config_to_section(cfg);
+            persist_profile(profile, profile_path, bus);
+        }
+        DialogAction::ApplyModalStyleAndSave(style) => {
+            // Update the TUI cache *and* the profile, then persist.
+            app.set_modal_style(*style);
+            profile.screen.modal_style = *style;
+            persist_profile(profile, profile_path, bus);
+        }
+        DialogAction::WriteProfile => {
+            persist_profile(profile, profile_path, bus);
+        }
+        DialogAction::ReadProfile => {
+            reload_profile(profile, app, profile_path, bus);
         }
         // All other variants are handled by the `action_to_command`
         // branch above or by the ApplyModalStyleLive early return; this
@@ -201,10 +256,91 @@ fn apply_dialog_action(action: &DialogAction, app: &mut TuiApp, bus: &EventBus) 
     }
 }
 
+/// Serialize `profile` to TOML and write it to `path`, publishing the
+/// outcome on the bus.
+///
+/// On success: [`Event::ProfileSaved`] with the destination path.
+/// On failure: [`Event::ProfileLoadFailed`] wrapping the IO / serialize
+/// error as [`rtcom_core::Error::InvalidConfig`] (the core error enum
+/// does not have a dedicated config-IO variant; `InvalidConfig` is the
+/// closest fit and the message carries the full cause).
+///
+/// When `path` is `None` (no discoverable profile location), the call
+/// is a no-op + tracing warn — save-flavored actions reaching this code
+/// path typically have a `Some`, but `None` can happen in tests and
+/// on `$HOME`-less CI.
+fn persist_profile(profile: &Profile, path: Option<&Path>, bus: &EventBus) {
+    let Some(path) = path else {
+        tracing::warn!("profile save requested but no profile path is available");
+        return;
+    };
+    match rtcom_config::write(path, profile) {
+        Ok(()) => {
+            bus.publish(Event::ProfileSaved {
+                path: path.to_path_buf(),
+            });
+        }
+        Err(e) => {
+            let err = rtcom_core::Error::InvalidConfig(format!("profile write: {e}"));
+            bus.publish(Event::ProfileLoadFailed {
+                path: path.to_path_buf(),
+                error: Arc::new(err),
+            });
+        }
+    }
+}
+
+/// Reload the profile from disk, replace the in-memory copy, apply the
+/// `[serial]` section live via [`Command::ApplyConfig`], and update the
+/// TUI snapshots for line endings + modal style.
+///
+/// On success: emits the same [`Event::ProfileSaved`] variant as a
+/// write — "saved" here reads as "profile-level action completed, toast
+/// it", and not having a dedicated `ProfileLoaded` variant is not worth
+/// one for v0.2. T19 can differentiate if users find it confusing.
+///
+/// Intentionally does **not** touch `ModemLineSnapshot`: the profile's
+/// `[modem]` section captures *startup policy* (`initial_dtr =
+/// unchanged|raise|lower`), not live state. Live modem lines are
+/// authoritative from the device and flow through
+/// [`Event::ModemLinesChanged`].
+fn reload_profile(profile: &mut Profile, app: &mut TuiApp, path: Option<&Path>, bus: &EventBus) {
+    let Some(path) = path else {
+        tracing::warn!("profile reload requested but no profile path is available");
+        return;
+    };
+    match rtcom_config::read(path) {
+        Ok(new_profile) => {
+            let serial_cfg = serial_section_to_config(&new_profile.serial);
+            bus.publish(Event::Command(Command::ApplyConfig(serial_cfg)));
+
+            app.set_line_endings(line_endings_from_profile(&new_profile));
+            app.set_modal_style(new_profile.screen.modal_style);
+
+            *profile = new_profile;
+
+            // Reuse ProfileSaved as "successful profile action" until
+            // T19 decides whether loads deserve their own toast label.
+            bus.publish(Event::ProfileSaved {
+                path: path.to_path_buf(),
+            });
+        }
+        Err(e) => {
+            let err = rtcom_core::Error::InvalidConfig(format!("profile read: {e}"));
+            bus.publish(Event::ProfileLoadFailed {
+                path: path.to_path_buf(),
+                error: Arc::new(err),
+            });
+        }
+    }
+}
+
 /// Translate a [`DialogAction`] into a [`Command`] when the action
 /// corresponds to a bus-dispatched command. Returns `None` for actions
-/// that the TUI handles locally (`ApplyModalStyleLive`) or that are
-/// deferred to a later task (`ApplyAndSave`, profile IO, line endings).
+/// that the TUI handles locally (`ApplyModalStyleLive`), that require
+/// profile IO (`ApplyAndSave`, `WriteProfile`, `ReadProfile`,
+/// `ApplyModalStyleAndSave`), or that need the runtime-mapper refactor
+/// shipping in v0.2.1 (`ApplyLineEndings*`).
 ///
 /// Split out as a free function so it can be unit-tested without
 /// constructing a full event bus.
@@ -217,7 +353,11 @@ const fn action_to_command(action: &DialogAction) -> Option<Command> {
         DialogAction::SendBreak => Some(Command::SendBreak),
         // Handled locally by `apply_dialog_action` — not a Command.
         DialogAction::ApplyModalStyleLive(_)
-        // Deferred to T18 (save-flavored).
+        // Save-flavored: drive Profile IO (see `apply_dialog_action`).
+        // `ApplyAndSave` *also* publishes Command::ApplyConfig, but it
+        // does so directly from `apply_dialog_action` after running
+        // the profile-write step, so it stays `None` here to avoid a
+        // double dispatch.
         | DialogAction::ApplyAndSave(_)
         | DialogAction::ApplyModalStyleAndSave(_)
         | DialogAction::WriteProfile
@@ -470,12 +610,19 @@ mod tests {
         let bus = EventBus::new(8);
         let mut rx = bus.subscribe();
         let mut app = TuiApp::new(bus.clone());
+        let mut profile = Profile::default();
 
         let cfg = SerialConfig {
             baud_rate: 9600,
             ..SerialConfig::default()
         };
-        apply_dialog_action(&DialogAction::ApplyLive(cfg), &mut app, &bus);
+        apply_dialog_action(
+            &DialogAction::ApplyLive(cfg),
+            &mut app,
+            &bus,
+            None,
+            &mut profile,
+        );
 
         match rx.try_recv().expect("Command on the bus") {
             Event::Command(Command::ApplyConfig(out)) => assert_eq!(out, cfg),
@@ -488,17 +635,199 @@ mod tests {
         let bus = EventBus::new(8);
         let mut rx = bus.subscribe();
         let mut app = TuiApp::new(bus.clone());
+        let mut profile = Profile::default();
 
         apply_dialog_action(
             &DialogAction::ApplyModalStyleLive(rtcom_config::ModalStyle::DimmedOverlay),
             &mut app,
             &bus,
+            None,
+            &mut profile,
         );
 
         // Nothing should be on the bus: the action is a local-only cache update.
         match rx.try_recv() {
             Err(tokio::sync::broadcast::error::TryRecvError::Empty) => {}
             other => panic!("expected Empty, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn persist_profile_writes_to_disk_and_publishes_profile_saved() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.toml");
+        let profile = Profile::default();
+        let bus = EventBus::new(64);
+        let mut rx = bus.subscribe();
+
+        persist_profile(&profile, Some(&path), &bus);
+
+        assert!(path.exists(), "profile file should be written");
+        match rx.try_recv().expect("ProfileSaved on the bus") {
+            Event::ProfileSaved { path: p } => assert_eq!(p, path),
+            other => panic!("expected ProfileSaved, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn persist_profile_without_path_is_noop() {
+        let profile = Profile::default();
+        let bus = EventBus::new(64);
+        let mut rx = bus.subscribe();
+
+        persist_profile(&profile, None, &bus);
+
+        // No event published.
+        assert!(matches!(
+            rx.try_recv(),
+            Err(broadcast::error::TryRecvError::Empty)
+        ));
+    }
+
+    #[tokio::test]
+    async fn persist_profile_io_error_publishes_profile_load_failed() {
+        // Stage: write a regular file, then try to persist "under" it
+        // (treating it as a directory). rtcom_config::write tries
+        // create_dir_all on the parent, which fails with NotADirectory
+        // because the "parent" is itself a file.
+        let dir = tempfile::tempdir().unwrap();
+        let blocker = dir.path().join("blocker");
+        std::fs::write(&blocker, b"").unwrap();
+        let path = blocker.join("nested.toml");
+
+        let profile = Profile::default();
+        let bus = EventBus::new(64);
+        let mut rx = bus.subscribe();
+
+        persist_profile(&profile, Some(&path), &bus);
+
+        match rx.try_recv().expect("ProfileLoadFailed on the bus") {
+            Event::ProfileLoadFailed { path: p, error } => {
+                assert_eq!(p, path);
+                assert!(error.to_string().contains("profile write"));
+            }
+            other => panic!("expected ProfileLoadFailed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn reload_profile_reads_and_dispatches_apply_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.toml");
+
+        // Write a non-default profile to disk.
+        let mut disk_profile = Profile::default();
+        disk_profile.serial.baud = 9600;
+        rtcom_config::write(&path, &disk_profile).unwrap();
+
+        // Memory copy is still the default (115200).
+        let mut memory_profile = Profile::default();
+        let bus = EventBus::new(64);
+        let mut rx = bus.subscribe();
+        let mut app = TuiApp::new(bus.clone());
+
+        reload_profile(&mut memory_profile, &mut app, Some(&path), &bus);
+
+        assert_eq!(memory_profile.serial.baud, 9600);
+
+        // First: ApplyConfig command with the newly-read baud.
+        match rx.try_recv().expect("ApplyConfig on the bus") {
+            Event::Command(Command::ApplyConfig(cfg)) => assert_eq!(cfg.baud_rate, 9600),
+            other => panic!("expected Command::ApplyConfig, got {other:?}"),
+        }
+        // Second: ProfileSaved as the user-visible confirmation.
+        match rx.try_recv().expect("ProfileSaved on the bus") {
+            Event::ProfileSaved { path: p } => assert_eq!(p, path),
+            other => panic!("expected ProfileSaved, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn reload_profile_malformed_toml_publishes_profile_load_failed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("bad.toml");
+        std::fs::write(&path, b"not valid =~~ toml [\n").unwrap();
+
+        let mut memory_profile = Profile::default();
+        let bus = EventBus::new(64);
+        let mut rx = bus.subscribe();
+        let mut app = TuiApp::new(bus.clone());
+
+        reload_profile(&mut memory_profile, &mut app, Some(&path), &bus);
+
+        match rx.try_recv().expect("ProfileLoadFailed on the bus") {
+            Event::ProfileLoadFailed { path: p, error } => {
+                assert_eq!(p, path);
+                assert!(error.to_string().contains("profile read"));
+            }
+            other => panic!("expected ProfileLoadFailed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn apply_dialog_action_apply_and_save_updates_profile_and_writes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("save.toml");
+        let bus = EventBus::new(64);
+        let mut rx = bus.subscribe();
+        let mut app = TuiApp::new(bus.clone());
+        let mut profile = Profile::default();
+
+        let cfg = SerialConfig {
+            baud_rate: 57_600,
+            ..SerialConfig::default()
+        };
+        apply_dialog_action(
+            &DialogAction::ApplyAndSave(cfg),
+            &mut app,
+            &bus,
+            Some(&path),
+            &mut profile,
+        );
+
+        // In-memory profile updated.
+        assert_eq!(profile.serial.baud, 57_600);
+        // File written.
+        assert!(path.exists());
+
+        // First: live ApplyConfig dispatched.
+        match rx.try_recv().expect("ApplyConfig on the bus") {
+            Event::Command(Command::ApplyConfig(out)) => assert_eq!(out, cfg),
+            other => panic!("expected Command::ApplyConfig, got {other:?}"),
+        }
+        // Second: ProfileSaved confirmation.
+        match rx.try_recv().expect("ProfileSaved on the bus") {
+            Event::ProfileSaved { path: p } => assert_eq!(p, path),
+            other => panic!("expected ProfileSaved, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn apply_dialog_action_apply_modal_style_and_save_persists_and_updates_app() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("style.toml");
+        let bus = EventBus::new(64);
+        let mut rx = bus.subscribe();
+        let mut app = TuiApp::new(bus.clone());
+        let mut profile = Profile::default();
+
+        apply_dialog_action(
+            &DialogAction::ApplyModalStyleAndSave(rtcom_config::ModalStyle::Fullscreen),
+            &mut app,
+            &bus,
+            Some(&path),
+            &mut profile,
+        );
+
+        assert_eq!(
+            profile.screen.modal_style,
+            rtcom_config::ModalStyle::Fullscreen
+        );
+        assert!(path.exists());
+
+        match rx.try_recv().expect("ProfileSaved on the bus") {
+            Event::ProfileSaved { path: p } => assert_eq!(p, path),
+            other => panic!("expected ProfileSaved, got {other:?}"),
         }
     }
 }
