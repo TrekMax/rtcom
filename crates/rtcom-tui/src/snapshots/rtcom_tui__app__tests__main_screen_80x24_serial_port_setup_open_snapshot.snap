@@ -25,4 +25,4 @@ expression: terminal.backend()
 "                  └──────────────────────────────────────────┘                  "
 "                                                                                "
 "                                                                                "
-" ^A m menu · ^A ? help · ^A q quit                                              "
+" ^A m menu · ^A ? help · ^A ^Q quit                                             "

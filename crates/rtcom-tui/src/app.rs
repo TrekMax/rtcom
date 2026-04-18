@@ -340,7 +340,7 @@ impl TuiApp {
 
         // Bottom bar: hint text.
         let bottom_line = Line::from(Span::styled(
-            " ^A m menu · ^A ? help · ^A q quit ",
+            " ^A m menu · ^A ? help · ^A ^Q quit ",
             Style::default().add_modifier(Modifier::DIM),
         ));
         f.render_widget(Paragraph::new(bottom_line), bottom);
