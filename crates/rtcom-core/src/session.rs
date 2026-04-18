@@ -31,8 +31,9 @@ use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 
 use crate::command::Command;
-use crate::config::{Parity, StopBits};
+use crate::config::{Parity, SerialConfig, StopBits};
 use crate::device::SerialDevice;
+use crate::error::Result;
 use crate::event::{Event, EventBus};
 use crate::mapper::{LineEndingMapper, Mapper};
 
@@ -319,6 +320,315 @@ impl<D: SerialDevice + 'static> Session<D> {
                 // observe it.
                 self.bus.publish(Event::MenuOpened);
             }
+        }
+    }
+
+    /// Apply a new [`SerialConfig`] to the device atomically.
+    ///
+    /// Applies `baud_rate → data_bits → stop_bits → parity → flow_control`
+    /// in that fixed order. On the first failing step, best-effort-rolls
+    /// back the previously-applied steps to the configuration that was
+    /// live at entry, returns the [`Error`](crate::Error) from the failing
+    /// step, and does not publish [`Event::ConfigChanged`]. On full
+    /// success, publishes [`Event::ConfigChanged`] with the device's
+    /// post-apply configuration and returns `Ok(())`.
+    ///
+    /// Fields whose new value equals the current value still go through
+    /// the setter call — the backend is free to short-circuit, and keeping
+    /// the apply sequence uniform avoids branchy rollback state.
+    ///
+    /// This method is `async` for forward compatibility with backends
+    /// whose setters may need to await (e.g. remote devices); the current
+    /// `serialport` backend is synchronous so the body performs no
+    /// awaits.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first setter failure encountered. Rollback failures
+    /// are best-effort and silently swallowed — the device is already in
+    /// an inconsistent state by that point and surfacing a secondary
+    /// error would mask the original cause.
+    // `async` is deliberate: the public API is async so a future backend
+    // (e.g. a networked device whose setters must round-trip) can plug in
+    // without a breaking signature change. The current synchronous path
+    // simply performs no awaits.
+    #[allow(clippy::unused_async)]
+    pub async fn apply_config(&mut self, new: SerialConfig) -> Result<()> {
+        let snapshot = *self.device.config();
+
+        if let Err(e) = self.device.set_baud_rate(new.baud_rate) {
+            self.rollback(&snapshot);
+            return Err(e);
+        }
+        if let Err(e) = self.device.set_data_bits(new.data_bits) {
+            self.rollback(&snapshot);
+            return Err(e);
+        }
+        if let Err(e) = self.device.set_stop_bits(new.stop_bits) {
+            self.rollback(&snapshot);
+            return Err(e);
+        }
+        if let Err(e) = self.device.set_parity(new.parity) {
+            self.rollback(&snapshot);
+            return Err(e);
+        }
+        if let Err(e) = self.device.set_flow_control(new.flow_control) {
+            self.rollback(&snapshot);
+            return Err(e);
+        }
+
+        self.bus
+            .publish(Event::ConfigChanged(*self.device.config()));
+        Ok(())
+    }
+
+    /// Best-effort rollback to `snapshot`. Errors are intentionally
+    /// ignored: the device is already inconsistent, and we prefer to
+    /// surface the original failure to the caller.
+    fn rollback(&mut self, snapshot: &SerialConfig) {
+        let _ = self.device.set_baud_rate(snapshot.baud_rate);
+        let _ = self.device.set_data_bits(snapshot.data_bits);
+        let _ = self.device.set_stop_bits(snapshot.stop_bits);
+        let _ = self.device.set_parity(snapshot.parity);
+        let _ = self.device.set_flow_control(snapshot.flow_control);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! Unit tests for [`Session::apply_config`] using an in-module
+    //! [`MockDevice`]. The mock is intentionally not exposed outside
+    //! this file — integration tests use [`crate::SerialPortDevice::pair`]
+    //! which offers a real PTY but cannot drive setter failures.
+
+    use std::pin::Pin;
+    use std::task::{Context, Poll};
+    use std::time::Duration;
+
+    use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+    use tokio::sync::broadcast::error::TryRecvError;
+
+    use super::{Event, Result, SerialDevice, Session};
+    use crate::config::{DataBits, FlowControl, ModemStatus, Parity, SerialConfig, StopBits};
+    use crate::error::Error;
+
+    /// In-memory [`SerialDevice`] with programmable setter failures.
+    ///
+    /// Each setter can be armed to fail on its next call via the
+    /// corresponding `fail_*` flag; the flag consumes itself (one-shot)
+    /// so a rearmed setter fails exactly once.
+    //
+    // The five booleans model five independent one-shot triggers on the
+    // five distinct setters; a state machine or enum would be strictly
+    // more awkward for this "pick which steps blow up" harness.
+    #[allow(clippy::struct_excessive_bools)]
+    struct MockDevice {
+        config: SerialConfig,
+        fail_baud: bool,
+        fail_data_bits: bool,
+        fail_stop_bits: bool,
+        fail_parity: bool,
+        fail_flow: bool,
+    }
+
+    impl MockDevice {
+        const fn new(config: SerialConfig) -> Self {
+            Self {
+                config,
+                fail_baud: false,
+                fail_data_bits: false,
+                fail_stop_bits: false,
+                fail_parity: false,
+                fail_flow: false,
+            }
+        }
+    }
+
+    impl AsyncRead for MockDevice {
+        fn poll_read(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            _buf: &mut ReadBuf<'_>,
+        ) -> Poll<std::io::Result<()>> {
+            Poll::Pending
+        }
+    }
+
+    impl AsyncWrite for MockDevice {
+        fn poll_write(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            buf: &[u8],
+        ) -> Poll<std::io::Result<usize>> {
+            Poll::Ready(Ok(buf.len()))
+        }
+        fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+        fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    impl SerialDevice for MockDevice {
+        fn set_baud_rate(&mut self, baud: u32) -> Result<()> {
+            if self.fail_baud {
+                self.fail_baud = false;
+                return Err(Error::InvalidConfig("mock: baud fail".into()));
+            }
+            self.config.baud_rate = baud;
+            Ok(())
+        }
+        fn set_data_bits(&mut self, bits: DataBits) -> Result<()> {
+            if self.fail_data_bits {
+                self.fail_data_bits = false;
+                return Err(Error::InvalidConfig("mock: data_bits fail".into()));
+            }
+            self.config.data_bits = bits;
+            Ok(())
+        }
+        fn set_stop_bits(&mut self, bits: StopBits) -> Result<()> {
+            if self.fail_stop_bits {
+                self.fail_stop_bits = false;
+                return Err(Error::InvalidConfig("mock: stop_bits fail".into()));
+            }
+            self.config.stop_bits = bits;
+            Ok(())
+        }
+        fn set_parity(&mut self, parity: Parity) -> Result<()> {
+            if self.fail_parity {
+                self.fail_parity = false;
+                return Err(Error::InvalidConfig("mock: parity fail".into()));
+            }
+            self.config.parity = parity;
+            Ok(())
+        }
+        fn set_flow_control(&mut self, flow: FlowControl) -> Result<()> {
+            if self.fail_flow {
+                self.fail_flow = false;
+                return Err(Error::InvalidConfig("mock: flow fail".into()));
+            }
+            self.config.flow_control = flow;
+            Ok(())
+        }
+        fn set_dtr(&mut self, _level: bool) -> Result<()> {
+            Ok(())
+        }
+        fn set_rts(&mut self, _level: bool) -> Result<()> {
+            Ok(())
+        }
+        fn send_break(&mut self, _duration: Duration) -> Result<()> {
+            Ok(())
+        }
+        fn modem_status(&mut self) -> Result<ModemStatus> {
+            Ok(ModemStatus::default())
+        }
+        fn config(&self) -> &SerialConfig {
+            &self.config
+        }
+    }
+
+    fn new_cfg() -> SerialConfig {
+        SerialConfig {
+            baud_rate: 9600,
+            data_bits: DataBits::Seven,
+            stop_bits: StopBits::Two,
+            parity: Parity::Even,
+            flow_control: FlowControl::Hardware,
+            ..SerialConfig::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn apply_config_success_publishes_config_changed() {
+        let device = MockDevice::new(SerialConfig::default());
+        let mut session = Session::new(device);
+        let mut rx = session.bus().subscribe();
+
+        let target = new_cfg();
+        session
+            .apply_config(target)
+            .await
+            .expect("apply_config should succeed");
+
+        // Device state reflects the new config.
+        let got = session.device.config();
+        assert_eq!(got.baud_rate, target.baud_rate);
+        assert_eq!(got.data_bits, target.data_bits);
+        assert_eq!(got.stop_bits, target.stop_bits);
+        assert_eq!(got.parity, target.parity);
+        assert_eq!(got.flow_control, target.flow_control);
+
+        // Event::ConfigChanged was published with the new config.
+        match rx.try_recv() {
+            Ok(Event::ConfigChanged(cfg)) => {
+                assert_eq!(cfg.baud_rate, target.baud_rate);
+                assert_eq!(cfg.flow_control, target.flow_control);
+            }
+            other => panic!("expected ConfigChanged, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn apply_config_rolls_back_on_middle_failure() {
+        // Start at default, arm the flow-control setter to fail.
+        let mut device = MockDevice::new(SerialConfig::default());
+        device.fail_flow = true;
+        let initial = *device.config();
+
+        let mut session = Session::new(device);
+        let mut rx = session.bus().subscribe();
+
+        let target = new_cfg();
+        let err = session
+            .apply_config(target)
+            .await
+            .expect_err("apply_config must fail when flow setter errors");
+        assert!(matches!(err, Error::InvalidConfig(_)));
+
+        // Device state was rolled back to the pre-apply snapshot.
+        let got = session.device.config();
+        assert_eq!(got.baud_rate, initial.baud_rate);
+        assert_eq!(got.data_bits, initial.data_bits);
+        assert_eq!(got.stop_bits, initial.stop_bits);
+        assert_eq!(got.parity, initial.parity);
+        assert_eq!(got.flow_control, initial.flow_control);
+
+        // No ConfigChanged event was published.
+        match rx.try_recv() {
+            Err(TryRecvError::Empty) => {}
+            Ok(Event::ConfigChanged(_)) => panic!("unexpected ConfigChanged after rollback"),
+            other => panic!("unexpected bus state: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn apply_config_rolls_back_on_first_step_failure() {
+        // Arm baud to fail — the very first step.
+        let mut device = MockDevice::new(SerialConfig::default());
+        device.fail_baud = true;
+        let initial = *device.config();
+
+        let mut session = Session::new(device);
+        let mut rx = session.bus().subscribe();
+
+        let target = new_cfg();
+        let err = session
+            .apply_config(target)
+            .await
+            .expect_err("apply_config must fail when baud setter errors");
+        assert!(matches!(err, Error::InvalidConfig(_)));
+
+        // Device state is unchanged (rollback is a no-op since nothing
+        // succeeded before the failing step, but we still verify).
+        let got = session.device.config();
+        assert_eq!(got, &initial);
+
+        // No ConfigChanged event was published.
+        match rx.try_recv() {
+            Err(TryRecvError::Empty) => {}
+            Ok(Event::ConfigChanged(_)) => panic!("unexpected ConfigChanged after rollback"),
+            other => panic!("unexpected bus state: {other:?}"),
         }
     }
 }
