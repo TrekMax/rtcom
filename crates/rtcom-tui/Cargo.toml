@@ -22,3 +22,6 @@ tui-term = { workspace = true }
 tokio = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
+
+[dev-dependencies]
+insta = { workspace = true }
