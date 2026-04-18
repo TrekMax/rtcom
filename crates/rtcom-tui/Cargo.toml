@@ -21,6 +21,9 @@ vt100 = { workspace = true }
 tui-term = { workspace = true }
 
 tokio = { workspace = true }
+tokio-util = { workspace = true }
+bytes = { workspace = true }
+futures = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
 

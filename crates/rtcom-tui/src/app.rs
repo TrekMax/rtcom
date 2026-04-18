@@ -148,6 +148,15 @@ impl TuiApp {
         self.config_summary = config_summary.into();
     }
 
+    /// Update just the config-summary portion of the top bar, leaving
+    /// the device path untouched.
+    ///
+    /// Used by the bus subscriber to refresh the status line after an
+    /// [`Event::ConfigChanged`] without having to know the device path.
+    pub fn set_config_summary(&mut self, config_summary: impl Into<String>) {
+        self.config_summary = config_summary.into();
+    }
+
     /// Mutable access to the serial data pane.
     ///
     /// Primarily used by the serial-reader subscriber to ingest incoming
