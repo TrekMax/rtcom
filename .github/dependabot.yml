@@ -1,0 +1,19 @@
+version: 2
+updates:
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    ignore:
+      # `rand 0.8.6` is a lockfile ghost: it is pulled in through the
+      # optional `termwiz` feature of ratatui (phf_generator -> rand),
+      # which rtcom does not enable. `cargo tree --workspace
+      # --all-features` confirms rand never reaches the compiled
+      # binary. Dependabot scans Cargo.lock without respecting feature
+      # activation, so it reports GHSA-cq8v-f236-94qc
+      # (`rand::rng` soundness, CVSS 0 Low) regardless.
+      #
+      # Revisit when ratatui upstream drops the termwiz-optional
+      # phf chain.
+      - dependency-name: "rand"
+        versions: ["< 0.9.3"]

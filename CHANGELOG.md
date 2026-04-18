@@ -46,8 +46,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **BREAKING**: rtcom now requires a real TTY on stdin/stdout; piping
   through a non-TTY process no longer works.
 - **BREAKING**: the v0.1 stdout line-by-line renderer is removed.
-- **MSRV bumped from 1.85 to 1.86** as a consequence of the ratatui
-  0.30 upgrade (see Security / Dependencies below).
+- **MSRV bumped from 1.85 to 1.88** as a consequence of the ratatui
+  0.30 upgrade and the `time 0.3.47` patched release (see Security /
+  Dependencies below).
 - `rtcom-cli` no longer owns the terminal lifecycle — delegated to
   `rtcom-tui`.
 - `crossterm` bumped from 0.27 to 0.28 (ratatui transitive unification).
@@ -71,9 +72,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   transitive dep via ratatui-core; the advisory is not reachable from
   rtcom's own code but the fix flows in automatically. Also pulls
   `vt100` `0.15` → `0.16` to match tui-term 0.3's `Screen` trait
-  bound. MSRV bumped from 1.85 to 1.86 as a consequence.
+  bound.
+- Bumped `time` to `0.3.47+` (from the previously pinned `0.3.41`) to
+  patch [GHSA-r6v5-fh4h-64xc] (stack-exhaustion DoS via untrusted
+  time parsing; Medium severity). rtcom does not parse time from
+  untrusted input, so the risk is low, but the patched version is
+  free to pick up.
+- MSRV bumped from 1.85 to 1.88 to satisfy `time 0.3.47`'s toolchain
+  requirement.
+- Added `.github/dependabot.yml` that ignores the `rand < 0.9.3`
+  advisory ([GHSA-cq8v-f236-94qc], CVSS 0 Low): `rand 0.8.6` appears
+  in `Cargo.lock` only as a ghost entry pulled by the unused
+  `termwiz` feature of ratatui (via `phf_generator`). `cargo tree
+  --workspace --all-features` confirms it is never compiled. The
+  ignore rule keeps Dependabot silent without masking a real issue.
 
 [GHSA-rhfx-m35p-ff5j]: https://github.com/advisories/GHSA-rhfx-m35p-ff5j
+[GHSA-r6v5-fh4h-64xc]: https://github.com/advisories/GHSA-r6v5-fh4h-64xc
+[GHSA-cq8v-f236-94qc]: https://github.com/advisories/GHSA-cq8v-f236-94qc
 
 ### Deprecated
 
