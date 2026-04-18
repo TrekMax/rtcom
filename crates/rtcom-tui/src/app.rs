@@ -70,6 +70,14 @@ pub struct TuiApp {
     /// top of the main chrome + modal in [`TuiApp::render`] so
     /// outcome messages are always visible.
     toasts: ToastQueue,
+    /// Names of the CLI flags (e.g. `-b`, `-d`, `--omap/--imap/--emap`)
+    /// that overrode a profile value at startup. Seeded empty and set
+    /// by the binary's `main` via [`TuiApp::set_cli_overrides`]. The
+    /// list is forwarded into [`RootMenu`] and then
+    /// [`crate::menu::SerialPortSetupDialog`] so the dialog can render
+    /// a hint explaining why the on-screen values may not match the
+    /// saved profile.
+    current_cli_overrides: Vec<&'static str>,
 }
 
 impl TuiApp {
@@ -96,7 +104,19 @@ impl TuiApp {
             current_modem: ModemLineSnapshot::default(),
             current_modal_style: ModalStyle::default(),
             toasts: ToastQueue::new(),
+            current_cli_overrides: Vec::new(),
         }
+    }
+
+    /// Record which CLI flags overrode a profile value at startup.
+    ///
+    /// Each element is a short, user-facing flag label (`-b`, `-d`,
+    /// `--omap/--imap/--emap`, ...). The
+    /// [`crate::menu::SerialPortSetupDialog`] shows a "N field(s)
+    /// overridden by CLI" hint at the bottom when this list is
+    /// non-empty; empty disables the hint entirely.
+    pub fn set_cli_overrides(&mut self, fields: Vec<&'static str>) {
+        self.current_cli_overrides = fields;
     }
 
     /// Push a new toast onto the queue. Consumed by the runner's
@@ -253,6 +273,7 @@ impl TuiApp {
                         self.current_line_endings,
                         self.current_modem,
                         self.current_modal_style,
+                        self.current_cli_overrides.clone(),
                     )));
                     let _ = self.bus.publish(Event::MenuOpened);
                     return Dispatch::OpenedMenu;

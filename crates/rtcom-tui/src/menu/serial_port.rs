@@ -75,19 +75,38 @@ pub struct SerialPortSetupDialog {
     pending: SerialConfig,
     cursor: usize,
     edit_state: EditState,
+    /// Flag labels (`-b`, `-d`, `-s`, `-p`, `-f`,
+    /// `--omap/--imap/--emap`) for every CLI argument that overrode a
+    /// profile value at startup. When non-empty, the dialog renders a
+    /// DIM hint line below the action buttons explaining why the
+    /// on-screen values may not match the saved profile. Empty
+    /// suppresses the hint entirely.
+    cli_overrides: Vec<&'static str>,
 }
 
 impl SerialPortSetupDialog {
     /// Construct a dialog seeded with `initial_config`. The cursor
     /// starts on the baud-rate row in field-navigation (idle) mode.
+    ///
+    /// `cli_overrides` carries flag labels for CLI args that
+    /// overrode a profile value at startup; when non-empty a hint
+    /// line renders below the action buttons.
     #[must_use]
-    pub const fn new(initial_config: SerialConfig) -> Self {
+    pub const fn new(initial_config: SerialConfig, cli_overrides: Vec<&'static str>) -> Self {
         Self {
             initial: initial_config,
             pending: initial_config,
             cursor: FIELD_BAUD,
             edit_state: EditState::Idle,
+            cli_overrides,
         }
+    }
+
+    /// Whether the dialog will render a CLI-override hint line at the
+    /// bottom (i.e. its `cli_overrides` list is non-empty).
+    #[must_use]
+    pub fn has_cli_override_hint(&self) -> bool {
+        !self.cli_overrides.is_empty()
     }
 
     /// Current cursor position. Valid range is `0..8`: indices `0..=4`
@@ -268,7 +287,10 @@ impl Dialog for SerialPortSetupDialog {
     }
 
     fn preferred_size(&self, outer: Rect) -> Rect {
-        centred_rect(outer, 44, 18)
+        // Reserve one extra row when the CLI-override hint is active
+        // so the bottom line doesn't collide with the dialog border.
+        let height = if self.has_cli_override_hint() { 19 } else { 18 };
+        centred_rect(outer, 44, height)
     }
 
     fn render(&self, area: Rect, buf: &mut Buffer) {
@@ -283,7 +305,7 @@ impl Dialog for SerialPortSetupDialog {
             Style::default().add_modifier(Modifier::DIM),
         ));
 
-        let lines = vec![
+        let mut lines = vec![
             Line::from(Span::raw("")),
             self.field_line(FIELD_BAUD, "Baud rate", cfg.baud_rate.to_string()),
             self.field_line(
@@ -309,6 +331,19 @@ impl Dialog for SerialPortSetupDialog {
             self.action_line(ACTION_APPLY_SAVE, "[Apply + Save]", "(F10)"),
             self.action_line(ACTION_CANCEL, "[Cancel]", "(Esc)"),
         ];
+
+        if self.has_cli_override_hint() {
+            let flags = self.cli_overrides.join("/");
+            let hint = format!(
+                " * {} field(s) overridden by CLI; relaunch without {} to use saved value *",
+                self.cli_overrides.len(),
+                flags,
+            );
+            lines.push(Line::from(Span::styled(
+                hint,
+                Style::default().add_modifier(Modifier::DIM),
+            )));
+        }
 
         Paragraph::new(lines).render(inner, buf);
     }
@@ -439,7 +474,7 @@ mod tests {
     }
 
     fn default_dialog() -> SerialPortSetupDialog {
-        SerialPortSetupDialog::new(SerialConfig::default())
+        SerialPortSetupDialog::new(SerialConfig::default(), Vec::new())
     }
 
     #[test]
@@ -613,6 +648,44 @@ mod tests {
             out,
             DialogOutcome::Action(DialogAction::ApplyLive(_))
         ));
+    }
+
+    #[test]
+    fn dialog_without_cli_overrides_has_no_hint_row() {
+        let d = SerialPortSetupDialog::new(SerialConfig::default(), Vec::new());
+        assert!(!d.has_cli_override_hint());
+    }
+
+    #[test]
+    fn dialog_with_cli_overrides_renders_hint() {
+        use ratatui::{backend::TestBackend, layout::Rect, Terminal};
+        let d = SerialPortSetupDialog::new(SerialConfig::default(), vec!["-b", "-d"]);
+        assert!(d.has_cli_override_hint());
+
+        // Render into a sizable test backend and confirm the hint text
+        // reaches the on-screen buffer.
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                let area = Rect {
+                    x: 0,
+                    y: 0,
+                    width: 80,
+                    height: 24,
+                };
+                d.render(area, f.buffer_mut());
+            })
+            .unwrap();
+        let rendered = format!("{}", terminal.backend());
+        assert!(
+            rendered.contains("2 field(s) overridden by CLI"),
+            "expected hint in rendered buffer, got:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("-b/-d"),
+            "expected flag list in rendered buffer, got:\n{rendered}"
+        );
     }
 
     #[test]

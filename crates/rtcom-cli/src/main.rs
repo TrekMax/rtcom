@@ -185,6 +185,7 @@ async fn async_main(
         rts: initial_rts,
     });
     app.set_modal_style(profile_modal_style(&profile));
+    app.set_cli_overrides(cli_override_labels(&cli));
 
     // Spawn the session loop. A clone of the cancel token stays here
     // so the TUI can trip it from a Dispatch::Quit.
@@ -305,6 +306,38 @@ const fn profile_modal_style(profile: &Profile) -> ModalStyle {
     profile.screen.modal_style
 }
 
+/// Build the short-flag labels for every CLI argument that overrode
+/// a profile value at startup. Consumed by
+/// [`rtcom_tui::TuiApp::set_cli_overrides`] to drive the Serial port
+/// setup dialog's "N field(s) overridden by CLI" hint line.
+///
+/// The `--omap`, `--imap`, and `--emap` flags collapse into a single
+/// `--omap/--imap/--emap` label: the hint text is already fairly dense
+/// and reporting three separate flag names for a related concept was
+/// more noise than signal in user testing.
+fn cli_override_labels(cli: &Cli) -> Vec<&'static str> {
+    let mut out: Vec<&'static str> = Vec::new();
+    if cli.baud.is_some() {
+        out.push("-b");
+    }
+    if cli.data_bits.is_some() {
+        out.push("-d");
+    }
+    if cli.stop_bits.is_some() {
+        out.push("-s");
+    }
+    if cli.parity.is_some() {
+        out.push("-p");
+    }
+    if cli.flow.is_some() {
+        out.push("-f");
+    }
+    if cli.omap.is_some() || cli.imap.is_some() || cli.emap.is_some() {
+        out.push("--omap/--imap/--emap");
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -315,6 +348,32 @@ mod tests {
         let mut profile = Profile::default();
         profile.screen.modal_style = ModalStyle::Fullscreen;
         assert_eq!(profile_modal_style(&profile), ModalStyle::Fullscreen);
+    }
+
+    #[test]
+    fn cli_override_labels_empty_when_nothing_is_overridden() {
+        let cli = Cli::parse_from(["rtcom", "/dev/x"]);
+        assert!(cli_override_labels(&cli).is_empty());
+    }
+
+    #[test]
+    fn cli_override_labels_lists_every_set_flag() {
+        let cli = Cli::parse_from([
+            "rtcom", "/dev/x", "-b", "9600", "-d", "7", "-s", "2", "-p", "even", "-f", "hw",
+            "--omap", "crlf",
+        ]);
+        let labels = cli_override_labels(&cli);
+        assert_eq!(
+            labels,
+            vec!["-b", "-d", "-s", "-p", "-f", "--omap/--imap/--emap"]
+        );
+    }
+
+    #[test]
+    fn cli_override_labels_collapses_line_ending_flags_into_single_label() {
+        let cli = Cli::parse_from(["rtcom", "/dev/x", "--imap", "igncr"]);
+        let labels = cli_override_labels(&cli);
+        assert_eq!(labels, vec!["--omap/--imap/--emap"]);
     }
 
     #[test]

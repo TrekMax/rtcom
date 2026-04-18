@@ -69,6 +69,12 @@ pub struct RootMenu {
     /// [`ScreenOptionsDialog::new`] when the user drills into the
     /// "Screen options" row (T15).
     initial_modal_style: ModalStyle,
+    /// Short flag labels for every CLI argument that overrode a
+    /// profile value at startup (e.g. `-b`, `-d`,
+    /// `--omap/--imap/--emap`). Forwarded to
+    /// [`SerialPortSetupDialog::new`] so the dialog can render a hint
+    /// line when the list is non-empty. Empty disables the hint.
+    cli_overrides: Vec<&'static str>,
 }
 
 const ITEMS: &[&str] = &[
@@ -92,15 +98,22 @@ const SEPARATORS_AFTER: &[usize] = &[2, 4];
 impl RootMenu {
     /// Construct a root menu with the cursor on the first item and
     /// snapshotting `initial_config`, `initial_line_endings`,
-    /// `initial_modem`, and `initial_modal_style` for forwarding to
-    /// sub-dialogs ([`SerialPortSetupDialog`], [`LineEndingsDialog`],
-    /// [`ModemControlDialog`], and [`ScreenOptionsDialog`]).
+    /// `initial_modem`, `initial_modal_style`, and `cli_overrides` for
+    /// forwarding to sub-dialogs ([`SerialPortSetupDialog`],
+    /// [`LineEndingsDialog`], [`ModemControlDialog`], and
+    /// [`ScreenOptionsDialog`]).
+    ///
+    /// `cli_overrides` carries short flag labels (`-b`, `-d`, ...)
+    /// for every CLI argument that overrode a profile value at
+    /// startup. Pass `Vec::new()` when no flags override anything;
+    /// the [`SerialPortSetupDialog`] skips its hint line in that case.
     #[must_use]
     pub const fn new(
         initial_config: SerialConfig,
         initial_line_endings: LineEndingConfig,
         initial_modem: ModemLineSnapshot,
         initial_modal_style: ModalStyle,
+        cli_overrides: Vec<&'static str>,
     ) -> Self {
         Self {
             items: ITEMS,
@@ -109,6 +122,7 @@ impl RootMenu {
             initial_line_endings,
             initial_modem,
             initial_modal_style,
+            cli_overrides,
         }
     }
 
@@ -152,9 +166,10 @@ impl RootMenu {
     fn activate(&self) -> DialogOutcome {
         match self.selected {
             EXIT_INDEX => DialogOutcome::Close,
-            SERIAL_PORT_SETUP_INDEX => {
-                DialogOutcome::Push(Box::new(SerialPortSetupDialog::new(self.initial_config)))
-            }
+            SERIAL_PORT_SETUP_INDEX => DialogOutcome::Push(Box::new(SerialPortSetupDialog::new(
+                self.initial_config,
+                self.cli_overrides.clone(),
+            ))),
             LINE_ENDINGS_INDEX => {
                 DialogOutcome::Push(Box::new(LineEndingsDialog::new(self.initial_line_endings)))
             }
@@ -254,6 +269,7 @@ mod tests {
             LineEndingConfig::default(),
             ModemLineSnapshot::default(),
             ModalStyle::default(),
+            Vec::new(),
         )
     }
 
@@ -345,6 +361,7 @@ mod tests {
             LineEndingConfig::default(),
             ModemLineSnapshot::default(),
             ModalStyle::default(),
+            Vec::new(),
         );
         assert_eq!(m.selected(), 0);
     }
