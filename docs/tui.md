@@ -81,6 +81,31 @@ menu or pass `--save` on the command line.
 ignored, missing leaf values fall back to the section default. Saving
 from the menu will rewrite the file and lose any hand-written comments.
 
+## Config merge priority
+
+rtcom merges three sources in this fixed order:
+
+```
+built-in defaults  ─┐
+profile file        ─┼─▶  effective runtime
+CLI arguments       ─┘
+```
+
+**CLI arguments always win**. If you edit the baud rate in the menu and
+press `F10` (Apply + Save), the profile gets the new baud — but the
+next time you launch with `rtcom -b 115200 /dev/ttyXXX`, the CLI's
+115200 overrides your saved value for that session.
+
+Two ways to make the profile value effective:
+
+1. **Drop the CLI flag**: `rtcom /dev/ttyXXX` reads the baud from the profile.
+2. **Force a write**: `rtcom -b 921600 /dev/ttyXXX --save` rewrites
+   the profile with 921600 and uses 921600 for the current session.
+
+The dialog's bottom hint line (`* N field(s) overridden by CLI; ...`)
+shows up when any CLI flag is overriding a profile value in the
+current session.
+
 ## Related documentation
 
 - [`CLAUDE.md`](../CLAUDE.md) — roadmap and architecture

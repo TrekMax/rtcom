@@ -45,6 +45,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `crossterm` bumped from 0.27 to 0.28 (ratatui transitive unification).
 - Bottom-bar label corrected from `^A q quit` to `^A ^Q quit` — the
   actual binding is Ctrl-Q (or Ctrl-X), not the plain letter `q`.
+- Serial port setup dialog now surfaces a hint line when any CLI flag
+  (`-b`, `-d`, `-s`, `-p`, `-f`, `--omap`/`--imap`/`--emap`) is
+  overriding the loaded profile value. Clarifies the defaults <
+  profile < CLI merge priority that tripped users during smoke testing.
 
 ### Deprecated
 
@@ -55,6 +59,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Partial section parsing in profile files now falls back to section
   defaults instead of erroring out.
+- Line-ending changes applied via the menu's `F10` (Apply + Save) now
+  persist to the profile file. Previously both Live and Save paths were
+  blanket-deferred; only Live actually required the runtime-mapper
+  refactor (v0.2.1).
 
 ### Deferred to v0.2.1 / later
 
