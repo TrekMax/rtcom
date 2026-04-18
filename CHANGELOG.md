@@ -49,6 +49,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`-b`, `-d`, `-s`, `-p`, `-f`, `--omap`/`--imap`/`--emap`) is
   overriding the loaded profile value. Clarifies the defaults <
   profile < CLI merge priority that tripped users during smoke testing.
+- Line endings dialog now shows inline recipes ("imap = crlf for
+  \\n-only devices" etc.) so users don't have to consult the manual
+  to translate the minicom rule names.
 
 ### Deprecated
 

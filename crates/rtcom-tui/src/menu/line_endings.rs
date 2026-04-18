@@ -173,7 +173,7 @@ impl Dialog for LineEndingsDialog {
     }
 
     fn preferred_size(&self, outer: Rect) -> Rect {
-        centred_rect(outer, 40, 14)
+        centred_rect(outer, 46, 20)
     }
 
     fn render(&self, area: Rect, buf: &mut Buffer) {
@@ -188,7 +188,33 @@ impl Dialog for LineEndingsDialog {
             Style::default().add_modifier(Modifier::DIM),
         ));
 
-        let lines = vec![
+        // Static recipe hint — shown after the action buttons. The
+        // minicom / picocom rule names (`crlf`, `lfcr`, `igncr`,
+        // `ignlf`) are compact but non-obvious; users routinely pick
+        // the wrong one on first try because the names describe the
+        // *transformation* rather than the *device behaviour* they
+        // match. Surfacing the common mapping here saves a trip to
+        // `docs/tui.md`.
+        let recipe_header = Line::from(Span::styled(
+            "  Recipes:",
+            Style::default().add_modifier(Modifier::BOLD),
+        ));
+        let recipe_lines = [
+            Line::from(Span::styled(
+                "    imap = crlf   device sends \\n only",
+                Style::default().add_modifier(Modifier::DIM),
+            )),
+            Line::from(Span::styled(
+                "           lfcr   device sends \\r only",
+                Style::default().add_modifier(Modifier::DIM),
+            )),
+            Line::from(Span::styled(
+                "           none   device sends \\r\\n",
+                Style::default().add_modifier(Modifier::DIM),
+            )),
+        ];
+
+        let mut lines = vec![
             Line::from(Span::raw("")),
             self.field_line(FIELD_OMAP, "OMAP", cfg.omap),
             self.field_line(FIELD_IMAP, "IMAP", cfg.imap),
@@ -199,7 +225,10 @@ impl Dialog for LineEndingsDialog {
             self.action_line(ACTION_APPLY_LIVE, "[Apply live]", "(F2)"),
             self.action_line(ACTION_APPLY_SAVE, "[Apply + Save]", "(F10)"),
             self.action_line(ACTION_CANCEL, "[Cancel]", "(Esc)"),
+            Line::from(Span::raw("")),
+            recipe_header,
         ];
+        lines.extend(recipe_lines);
 
         Paragraph::new(lines).render(inner, buf);
     }
@@ -371,7 +400,7 @@ mod tests {
     }
 
     #[test]
-    fn preferred_size_40x14() {
+    fn preferred_size_accommodates_recipe() {
         use ratatui::layout::Rect;
         let d = default_dialog();
         let outer = Rect {
@@ -381,8 +410,31 @@ mod tests {
             height: 24,
         };
         let pref = d.preferred_size(outer);
-        assert_eq!(pref.width, 40);
-        assert_eq!(pref.height, 14);
+        assert!(pref.width >= 46, "expected >=46 cols, got {}", pref.width);
+        assert!(pref.height >= 20, "expected >=20 rows, got {}", pref.height);
+    }
+
+    #[test]
+    fn dialog_renders_recipe_hint() {
+        use ratatui::{backend::TestBackend, Terminal};
+        let d = default_dialog();
+        let backend = TestBackend::new(60, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                let area = d.preferred_size(f.area());
+                d.render(area, f.buffer_mut());
+            })
+            .unwrap();
+        let buf_dump = format!("{}", terminal.backend());
+        assert!(
+            buf_dump.contains("Recipes:"),
+            "missing recipe header in:\n{buf_dump}"
+        );
+        assert!(
+            buf_dump.contains("crlf"),
+            "missing 'crlf' mention in:\n{buf_dump}"
+        );
     }
 
     #[test]
