@@ -9,6 +9,7 @@
 
 pub mod placeholder;
 pub mod root;
+pub mod serial_port;
 
 pub use placeholder::PlaceholderDialog;
 pub use root::RootMenu;

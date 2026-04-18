@@ -63,6 +63,31 @@ pub trait Dialog {
     fn render(&self, area: Rect, buf: &mut Buffer);
     /// Handle a key event and report back how the stack should react.
     fn handle_key(&mut self, key: KeyEvent) -> DialogOutcome;
+
+    /// Preferred size of the dialog when rendered inside `outer`.
+    ///
+    /// Default impl returns a `30x12` rectangle centred inside `outer`
+    /// — enough for a typical seven-item menu. Dialogs with more
+    /// fields override this to return a wider rect.
+    fn preferred_size(&self, outer: Rect) -> Rect {
+        centred_rect(outer, 30, 12)
+    }
+}
+
+/// Centre a `width x height` rectangle inside `outer`, clipping if
+/// the outer is smaller than the requested size.
+#[must_use]
+pub fn centred_rect(outer: Rect, width: u16, height: u16) -> Rect {
+    let clamped_w = width.min(outer.width);
+    let clamped_h = height.min(outer.height);
+    let x = outer.x + (outer.width.saturating_sub(clamped_w)) / 2;
+    let y = outer.y + (outer.height.saturating_sub(clamped_h)) / 2;
+    Rect {
+        x,
+        y,
+        width: clamped_w,
+        height: clamped_h,
+    }
 }
 
 /// Stack of [`Dialog`]s. The topmost dialog receives keys first;
@@ -250,5 +275,37 @@ mod tests {
             DialogAction::ApplyLive(_) => {}
             _ => panic!("wrong variant"),
         }
+    }
+
+    #[test]
+    fn dialog_preferred_size_default_is_30x12_centred() {
+        let d = ClosingDialog;
+        let outer = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
+        let pref = d.preferred_size(outer);
+        assert_eq!(pref.width, 30);
+        assert_eq!(pref.height, 12);
+        // centred inside 80x24: x = (80 - 30) / 2 = 25, y = (24 - 12) / 2 = 6
+        assert_eq!(pref.x, 25);
+        assert_eq!(pref.y, 6);
+    }
+
+    #[test]
+    fn centred_rect_clips_to_outer() {
+        let outer = Rect {
+            x: 0,
+            y: 0,
+            width: 20,
+            height: 5,
+        };
+        let r = centred_rect(outer, 30, 12);
+        assert_eq!(r.width, 20);
+        assert_eq!(r.height, 5);
+        assert_eq!(r.x, 0);
+        assert_eq!(r.y, 0);
     }
 }
