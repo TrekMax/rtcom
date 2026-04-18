@@ -1,8 +1,20 @@
-//! Generic yes/no confirmation dialog (skeleton — T15 GREEN implements
-//! real behaviour).
+//! Generic yes/no confirmation dialog.
+//!
+//! [`ConfirmDialog`] is a reusable two-button dialog that emits a
+//! caller-supplied [`DialogAction`] when the user confirms (`y` / `Y`
+//! / `Enter`) and closes without action on `n` / `N` / `Esc`. It is
+//! used by the root menu for the "Write profile" and "Read profile"
+//! rows (T15) and can be reused by any future flow that needs a
+//! single-shot confirmation prompt.
 
-use crossterm::event::KeyEvent;
-use ratatui::{buffer::Buffer, layout::Rect};
+use crossterm::event::{KeyCode, KeyEvent};
+use ratatui::{
+    buffer::Buffer,
+    layout::Rect,
+    style::{Modifier, Style},
+    text::{Line, Span},
+    widgets::{Block, Paragraph, Widget},
+};
 
 use crate::modal::{centred_rect, Dialog, DialogAction, DialogOutcome};
 
@@ -14,14 +26,13 @@ const PREFERRED_HEIGHT: u16 = 8;
 /// Reusable yes/no confirmation dialog.
 ///
 /// Constructed with a title, a prompt message, and the
-/// [`DialogAction`] to emit on confirmation. The skeleton consumes
-/// every key with no side effects; the T15 GREEN commit adds the real
-/// y/N/Esc handling and rendering.
+/// [`DialogAction`] to emit on confirmation. Emits
+/// [`DialogOutcome::Action`] on `y` / `Y` / `Enter` and
+/// [`DialogOutcome::Close`] on `n` / `N` / `Esc`; every other key is
+/// swallowed with [`DialogOutcome::Consumed`].
 pub struct ConfirmDialog {
     title: String,
-    #[allow(dead_code, reason = "used by T15 GREEN rendering")]
     prompt: String,
-    #[allow(dead_code, reason = "emitted by T15 GREEN confirm path")]
     on_confirm: DialogAction,
     preferred_width: u16,
     preferred_height: u16,
@@ -29,6 +40,10 @@ pub struct ConfirmDialog {
 
 impl ConfirmDialog {
     /// Construct a new confirmation dialog.
+    ///
+    /// `title` is used both as the window title and as the widget
+    /// title; `prompt` is rendered as the body text; `on_confirm` is
+    /// the [`DialogAction`] emitted when the user confirms.
     #[must_use]
     pub fn new(
         title: impl Into<String>,
@@ -50,12 +65,29 @@ impl Dialog for ConfirmDialog {
         self.title.as_str()
     }
 
-    fn render(&self, _area: Rect, _buf: &mut Buffer) {
-        // T15 GREEN: draw title + prompt + "[Y]es [N]o" hint.
+    fn render(&self, area: Rect, buf: &mut Buffer) {
+        let block = Block::bordered().title(self.title.as_str());
+        let inner = block.inner(area);
+        block.render(area, buf);
+        let lines = vec![
+            Line::from(self.prompt.as_str()),
+            Line::from(""),
+            Line::from(Span::styled(
+                "  [Y]es   [N]o / Esc to cancel  ",
+                Style::default().add_modifier(Modifier::DIM),
+            )),
+        ];
+        Paragraph::new(lines).render(inner, buf);
     }
 
-    fn handle_key(&mut self, _key: KeyEvent) -> DialogOutcome {
-        DialogOutcome::Consumed
+    fn handle_key(&mut self, key: KeyEvent) -> DialogOutcome {
+        match key.code {
+            KeyCode::Char('y' | 'Y') | KeyCode::Enter => {
+                DialogOutcome::Action(self.on_confirm.clone())
+            }
+            KeyCode::Char('n' | 'N') | KeyCode::Esc => DialogOutcome::Close,
+            _ => DialogOutcome::Consumed,
+        }
     }
 
     fn preferred_size(&self, outer: Rect) -> Rect {
