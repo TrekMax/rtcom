@@ -2,7 +2,12 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Top-level user profile persisted to TOML.
+/// Top-level rtcom profile persisted to TOML.
+///
+/// Unknown TOML keys are silently ignored (serde default), and missing leaf
+/// fields within a declared section fall back to the section's [`Default`]
+/// impl — so hand-edited profiles with partial overrides keep working across
+/// rtcom versions that add fields.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct Profile {
     /// Serial-port settings (baud, framing, flow control).
@@ -21,6 +26,7 @@ pub struct Profile {
 
 /// Serial-port settings.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct SerialSection {
     /// Baud rate in bits per second (e.g. `115_200`).
     pub baud: u32,
@@ -48,6 +54,7 @@ impl Default for SerialSection {
 
 /// Line-ending mappers.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct LineEndingsSection {
     /// Output map applied to bytes sent to the device.
     pub omap: String,
@@ -69,6 +76,7 @@ impl Default for LineEndingsSection {
 
 /// Modem control line startup policy.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct ModemSection {
     /// Initial DTR state: `unchanged`, `raise`, or `lower`.
     pub initial_dtr: String,
@@ -87,6 +95,7 @@ impl Default for ModemSection {
 
 /// Screen / TUI rendering preferences.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct ScreenSection {
     /// How modal dialogs render over the terminal stream.
     pub modal_style: ModalStyle,
@@ -150,5 +159,17 @@ mod tests {
         "#;
         let parsed: Profile = toml::from_str(with_unknown).expect("parse");
         assert_eq!(parsed.serial.baud, 9600);
+    }
+
+    #[test]
+    fn profile_partial_section_uses_defaults_for_missing_leaf_fields() {
+        let partial = r"
+            [serial]
+            baud = 9600
+        ";
+        let parsed: Profile = toml::from_str(partial).expect("parse");
+        assert_eq!(parsed.serial.baud, 9600);
+        assert_eq!(parsed.serial.data_bits, 8); // default preserved
+        assert_eq!(parsed.serial.parity, "none"); // default preserved
     }
 }
