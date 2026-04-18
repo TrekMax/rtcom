@@ -24,6 +24,8 @@ pub enum Command {
     SendBreak,
     /// Apply a new baud rate, parsed from the digits collected after `b`.
     SetBaud(u32),
+    /// Open the TUI configuration menu.
+    OpenMenu,
 }
 
 /// What [`CommandKeyParser::feed`] produced for a single input byte.
@@ -108,6 +110,7 @@ impl CommandKeyParser {
             b'c' => ParseOutput::Command(Command::ShowConfig),
             b't' => ParseOutput::Command(Command::ToggleDtr),
             b'g' => ParseOutput::Command(Command::ToggleRts),
+            b'm' => ParseOutput::Command(Command::OpenMenu),
             b'\\' => ParseOutput::Command(Command::SendBreak),
             b'b' => {
                 self.state = State::AwaitingBaudDigits(String::new());
@@ -131,6 +134,18 @@ impl CommandKeyParser {
             }
             _ => ParseOutput::None,
         }
+    }
+}
+
+/// Default escape byte for the command-key parser: `^A` (`0x01`),
+/// matching the documented CLI default.
+pub const DEFAULT_ESCAPE_BYTE: u8 = 0x01;
+
+impl Default for CommandKeyParser {
+    /// Creates a parser whose escape byte is [`DEFAULT_ESCAPE_BYTE`]
+    /// (`^A` / `0x01`).
+    fn default() -> Self {
+        Self::new(DEFAULT_ESCAPE_BYTE)
     }
 }
 
@@ -326,5 +341,13 @@ mod tests {
     #[test]
     fn escape_byte_is_observable() {
         assert_eq!(parser().escape_byte(), ESC);
+    }
+
+    #[test]
+    fn command_parser_recognizes_open_menu() {
+        let mut parser = CommandKeyParser::default();
+        // ^A (0x01) then 'm'
+        assert_eq!(parser.feed(0x01), ParseOutput::None);
+        assert_eq!(parser.feed(b'm'), ParseOutput::Command(Command::OpenMenu));
     }
 }

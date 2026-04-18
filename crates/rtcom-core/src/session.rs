@@ -312,6 +312,13 @@ impl<D: SerialDevice + 'static> Session<D> {
                     self.bus.publish(Event::Error(Arc::new(err)));
                 }
             },
+            Command::OpenMenu => {
+                // T4 only wires the parser → event. The actual TUI
+                // subscriber lands in a later task; for now just
+                // broadcast the signal so late-bound listeners can
+                // observe it.
+                self.bus.publish(Event::MenuOpened);
+            }
         }
     }
 }

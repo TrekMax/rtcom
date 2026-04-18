@@ -14,6 +14,7 @@
 //! [`EventBus::subscribe`] before any code that may publish events of
 //! interest, typically before calling [`Session::run`](crate::Session::run).
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use bytes::Bytes;
@@ -63,6 +64,25 @@ pub enum Event {
     /// A non-fatal error worth surfacing to subscribers. Wrapped in `Arc`
     /// so the broadcast channel can clone it cheaply across receivers.
     Error(Arc<Error>),
+    /// The TUI menu opened. Informational signal so log writers / scripts
+    /// can react (e.g., pause disk flushing while the UI is interactive).
+    MenuOpened,
+    /// The TUI menu closed.
+    MenuClosed,
+    /// A profile was successfully written to disk.
+    ProfileSaved {
+        /// Destination path on disk.
+        path: PathBuf,
+    },
+    /// A profile read or write failed. The session continues with the
+    /// last-known-good configuration; subscribers surface this to the user
+    /// (e.g. as a toast) but must not treat it as fatal.
+    ProfileLoadFailed {
+        /// Path that failed to load or save.
+        path: PathBuf,
+        /// Source error, shareable across the broadcast fan-out.
+        error: Arc<Error>,
+    },
 }
 
 /// Multi-producer, multi-consumer event hub.
@@ -172,5 +192,43 @@ mod tests {
     fn zero_capacity_is_promoted_to_one() {
         // Mostly a smoke check: broadcast::channel(0) panics; we must not.
         let _bus = EventBus::new(0);
+    }
+
+    #[test]
+    fn event_menu_opened_closed_are_clone() {
+        const fn assert_clone<T: Clone>() {}
+        assert_clone::<Event>();
+        assert!(matches!(Event::MenuOpened, Event::MenuOpened));
+        assert!(matches!(Event::MenuClosed, Event::MenuClosed));
+    }
+
+    #[test]
+    fn event_profile_saved_has_path() {
+        let ev = Event::ProfileSaved {
+            path: std::path::PathBuf::from("/tmp/x.toml"),
+        };
+        match ev {
+            Event::ProfileSaved { path } => {
+                assert_eq!(path, std::path::PathBuf::from("/tmp/x.toml"));
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn event_profile_load_failed_has_path_and_error() {
+        use std::sync::Arc;
+        let err = crate::error::Error::InvalidConfig("boom".into());
+        let ev = Event::ProfileLoadFailed {
+            path: std::path::PathBuf::from("/tmp/bad.toml"),
+            error: Arc::new(err),
+        };
+        match ev {
+            Event::ProfileLoadFailed { path, error } => {
+                assert_eq!(path, std::path::PathBuf::from("/tmp/bad.toml"));
+                assert!(error.to_string().contains("boom"));
+            }
+            _ => panic!("wrong variant"),
+        }
     }
 }
