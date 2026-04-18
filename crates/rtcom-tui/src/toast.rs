@@ -125,7 +125,11 @@ impl ToastQueue {
     }
 
     /// Borrow the list of currently-visible toasts, oldest first.
+    //
+    // Not `const fn`: `&self.toasts` (`Vec<Toast>` → `&[Toast]`) goes
+    // through deref coercion, which is not yet const as of Rust 1.86.
     #[must_use]
+    #[allow(clippy::missing_const_for_fn)]
     pub fn visible(&self) -> &[Toast] {
         &self.toasts
     }

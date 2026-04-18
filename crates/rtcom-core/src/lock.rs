@@ -151,7 +151,13 @@ impl UucpLock {
     }
 
     /// Returns the lock file path this guard owns.
+    //
+    // Not `const fn` because `&self.path` (`PathBuf` → `&Path`) goes
+    // through deref coercion, which is not yet allowed in const
+    // context (Rust 1.86). The clippy `missing_const_for_fn` lint
+    // suggestion is wrong here — the body fails to compile as const.
     #[must_use]
+    #[allow(clippy::missing_const_for_fn)]
     pub fn lock_file_path(&self) -> &Path {
         &self.path
     }

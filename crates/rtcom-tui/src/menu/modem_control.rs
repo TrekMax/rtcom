@@ -83,7 +83,7 @@ impl ModemControlDialog {
     }
 
     /// Move the cursor up one row (wraps).
-    fn move_up(&mut self) {
+    const fn move_up(&mut self) {
         self.cursor = if self.cursor == 0 {
             CURSOR_MAX - 1
         } else {
@@ -92,7 +92,7 @@ impl ModemControlDialog {
     }
 
     /// Move the cursor down one row (wraps).
-    fn move_down(&mut self) {
+    const fn move_down(&mut self) {
         self.cursor = (self.cursor + 1) % CURSOR_MAX;
     }
 

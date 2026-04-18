@@ -150,7 +150,7 @@ impl TuiApp {
 
     /// Mutable access to the toast queue. Mainly used by tests and
     /// the main-loop tick to advance expiration.
-    pub fn toasts_mut(&mut self) -> &mut ToastQueue {
+    pub const fn toasts_mut(&mut self) -> &mut ToastQueue {
         &mut self.toasts
     }
 
@@ -231,7 +231,7 @@ impl TuiApp {
     ///
     /// Primarily used by the serial-reader subscriber to ingest incoming
     /// bytes; tests also use it to seed a known screen state.
-    pub fn serial_pane_mut(&mut self) -> &mut SerialPane {
+    pub const fn serial_pane_mut(&mut self) -> &mut SerialPane {
         &mut self.serial_pane
     }
 

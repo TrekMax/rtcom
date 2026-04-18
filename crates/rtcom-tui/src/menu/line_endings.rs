@@ -85,7 +85,7 @@ impl LineEndingsDialog {
     }
 
     /// Move the cursor up one row (wraps).
-    fn move_up(&mut self) {
+    const fn move_up(&mut self) {
         self.cursor = if self.cursor == 0 {
             CURSOR_MAX - 1
         } else {
@@ -94,13 +94,13 @@ impl LineEndingsDialog {
     }
 
     /// Move the cursor down one row (wraps).
-    fn move_down(&mut self) {
+    const fn move_down(&mut self) {
         self.cursor = (self.cursor + 1) % CURSOR_MAX;
     }
 
     /// Cycle the enum value at the current field cursor.
     /// No-op when the cursor is on an action button.
-    fn cycle_current_field(&mut self) {
+    const fn cycle_current_field(&mut self) {
         match self.cursor {
             FIELD_OMAP => self.pending.omap = cycle_line_ending(self.pending.omap),
             FIELD_IMAP => self.pending.imap = cycle_line_ending(self.pending.imap),
@@ -110,7 +110,7 @@ impl LineEndingsDialog {
     }
 
     /// Handle `Enter` in field-navigation mode.
-    fn activate(&mut self) -> DialogOutcome {
+    const fn activate(&mut self) -> DialogOutcome {
         match self.cursor {
             FIELD_OMAP | FIELD_IMAP | FIELD_EMAP => {
                 self.cycle_current_field();

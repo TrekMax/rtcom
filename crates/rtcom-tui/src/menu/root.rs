@@ -140,7 +140,7 @@ impl RootMenu {
 
     /// Move the cursor up one row, wrapping to the last item when
     /// called on the first.
-    fn move_up(&mut self) {
+    const fn move_up(&mut self) {
         if self.selected == 0 {
             self.selected = self.items.len() - 1;
         } else {
@@ -150,7 +150,7 @@ impl RootMenu {
 
     /// Move the cursor down one row, wrapping to the first item when
     /// called on the last.
-    fn move_down(&mut self) {
+    const fn move_down(&mut self) {
         if self.selected + 1 >= self.items.len() {
             self.selected = 0;
         } else {

@@ -60,7 +60,7 @@ impl SerialPane {
     /// vt100 reflows accordingly — lines longer than the new width
     /// wrap; scrollback is preserved as-is.
     pub fn resize(&mut self, rows: u16, cols: u16) {
-        self.parser.set_size(rows, cols);
+        self.parser.screen_mut().set_size(rows, cols);
     }
 
     /// Scrollback row count configured for this pane.
@@ -102,7 +102,7 @@ impl SerialPane {
             .scrollback_offset()
             .saturating_add(lines)
             .min(self.scrollback_rows);
-        self.parser.set_scrollback(target);
+        self.parser.screen_mut().set_scrollback(target);
     }
 
     /// Scroll down by `lines` (toward newer content / the live tail).
@@ -111,7 +111,7 @@ impl SerialPane {
     /// equivalent to [`SerialPane::scroll_to_bottom`].
     pub fn scroll_down(&mut self, lines: usize) {
         let target = self.scrollback_offset().saturating_sub(lines);
-        self.parser.set_scrollback(target);
+        self.parser.screen_mut().set_scrollback(target);
     }
 
     /// Jump to the oldest row retained in the scrollback buffer.
@@ -119,12 +119,14 @@ impl SerialPane {
     /// Requests the configured scrollback capacity; vt100 internally
     /// clamps to however much history actually exists.
     pub fn scroll_to_top(&mut self) {
-        self.parser.set_scrollback(self.scrollback_rows);
+        self.parser
+            .screen_mut()
+            .set_scrollback(self.scrollback_rows);
     }
 
     /// Jump back to the live tail (`scrollback_offset == 0`).
     pub fn scroll_to_bottom(&mut self) {
-        self.parser.set_scrollback(0);
+        self.parser.screen_mut().set_scrollback(0);
     }
 }
 
