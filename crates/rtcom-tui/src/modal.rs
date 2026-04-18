@@ -50,6 +50,12 @@ pub enum DialogAction {
     /// Apply [`LineEndingConfig`] to the live session *and* persist
     /// it to profile (F10 path).
     ApplyLineEndingsAndSave(LineEndingConfig),
+    /// Assert (`true`) or de-assert (`false`) the DTR output line.
+    SetDtr(bool),
+    /// Assert (`true`) or de-assert (`false`) the RTS output line.
+    SetRts(bool),
+    /// Send a line break (~250ms).
+    SendBreak,
     /// Persist the current profile as-is.
     WriteProfile,
     /// Reload profile from disk (discards unsaved live changes).

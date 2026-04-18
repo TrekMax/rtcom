@@ -9,7 +9,7 @@ use ratatui::{
 };
 use rtcom_core::{
     command::{Command, CommandKeyParser, ParseOutput},
-    Event, EventBus, LineEndingConfig, SerialConfig,
+    Event, EventBus, LineEndingConfig, ModemLineSnapshot, SerialConfig,
 };
 use tui_term::widget::PseudoTerminal;
 
@@ -48,6 +48,13 @@ pub struct TuiApp {
     /// instances so the T13 [`crate::menu::LineEndingsDialog`] opens
     /// with live values.
     current_line_endings: LineEndingConfig,
+    /// Current DTR / RTS output-line snapshot as known to rtcom;
+    /// seeded to [`ModemLineSnapshot::default`] (both lines
+    /// de-asserted) at construction and updated by
+    /// [`TuiApp::set_modem_lines`]. Forwarded into new [`RootMenu`]
+    /// instances so the T14 [`crate::menu::ModemControlDialog`] opens
+    /// with live values.
+    current_modem: ModemLineSnapshot,
 }
 
 impl TuiApp {
@@ -71,6 +78,7 @@ impl TuiApp {
             modal_stack: ModalStack::new(),
             current_config: SerialConfig::default(),
             current_line_endings: LineEndingConfig::default(),
+            current_modem: ModemLineSnapshot::default(),
         }
     }
 
@@ -91,6 +99,16 @@ impl TuiApp {
     /// changes (T17 wires this into the `ApplyLineEndingsLive` path).
     pub const fn set_line_endings(&mut self, le: LineEndingConfig) {
         self.current_line_endings = le;
+    }
+
+    /// Update the cached [`ModemLineSnapshot`] that new [`RootMenu`]
+    /// pushes pass down to the T14
+    /// [`crate::menu::ModemControlDialog`].
+    ///
+    /// Call this whenever the live session's modem output lines
+    /// change (T17 wires this into the `SetDtr` / `SetRts` paths).
+    pub const fn set_modem_lines(&mut self, snapshot: ModemLineSnapshot) {
+        self.current_modem = snapshot;
     }
 
     /// Whether the configuration menu is currently open.
@@ -179,6 +197,7 @@ impl TuiApp {
                     self.modal_stack.push(Box::new(RootMenu::new(
                         self.current_config,
                         self.current_line_endings,
+                        self.current_modem,
                     )));
                     let _ = self.bus.publish(Event::MenuOpened);
                     return Dispatch::OpenedMenu;

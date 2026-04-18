@@ -38,7 +38,8 @@ pub mod session;
 
 pub use command::{Command, CommandKeyParser, ParseOutput};
 pub use config::{
-    DataBits, FlowControl, ModemStatus, Parity, SerialConfig, StopBits, DEFAULT_READ_TIMEOUT,
+    DataBits, FlowControl, ModemLineSnapshot, ModemStatus, Parity, SerialConfig, StopBits,
+    DEFAULT_READ_TIMEOUT,
 };
 pub use device::{SerialDevice, SerialPortDevice};
 pub use error::{Error, Result};

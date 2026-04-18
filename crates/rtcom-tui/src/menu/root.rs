@@ -12,12 +12,12 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Paragraph, Widget},
 };
-use rtcom_core::{LineEndingConfig, SerialConfig};
+use rtcom_core::{LineEndingConfig, ModemLineSnapshot, SerialConfig};
 
 use crate::{
     menu::{
-        line_endings::LineEndingsDialog, placeholder::PlaceholderDialog,
-        serial_port::SerialPortSetupDialog,
+        line_endings::LineEndingsDialog, modem_control::ModemControlDialog,
+        placeholder::PlaceholderDialog, serial_port::SerialPortSetupDialog,
     },
     modal::{Dialog, DialogOutcome},
 };
@@ -28,6 +28,9 @@ const SERIAL_PORT_SETUP_INDEX: usize = 0;
 /// Index of the "Line endings" item; selecting it drills into the
 /// real [`LineEndingsDialog`] (T13).
 const LINE_ENDINGS_INDEX: usize = 1;
+/// Index of the "Modem control" item; selecting it drills into the
+/// real [`ModemControlDialog`] (T14).
+const MODEM_CONTROL_INDEX: usize = 2;
 
 /// Top-level configuration menu (the first real [`Dialog`] impl).
 ///
@@ -46,6 +49,10 @@ pub struct RootMenu {
     /// [`LineEndingsDialog::new`] when the user drills into the
     /// "Line endings" row.
     initial_line_endings: LineEndingConfig,
+    /// Snapshot of the live [`ModemLineSnapshot`]; forwarded to
+    /// [`ModemControlDialog::new`] when the user drills into the
+    /// "Modem control" row.
+    initial_modem: ModemLineSnapshot,
 }
 
 const ITEMS: &[&str] = &[
@@ -68,16 +75,22 @@ const SEPARATORS_AFTER: &[usize] = &[2, 4];
 
 impl RootMenu {
     /// Construct a root menu with the cursor on the first item and
-    /// snapshotting `initial_config` + `initial_line_endings` for
-    /// forwarding to sub-dialogs (currently [`SerialPortSetupDialog`]
-    /// and [`LineEndingsDialog`]).
+    /// snapshotting `initial_config`, `initial_line_endings`, and
+    /// `initial_modem` for forwarding to sub-dialogs (currently
+    /// [`SerialPortSetupDialog`], [`LineEndingsDialog`], and
+    /// [`ModemControlDialog`]).
     #[must_use]
-    pub const fn new(initial_config: SerialConfig, initial_line_endings: LineEndingConfig) -> Self {
+    pub const fn new(
+        initial_config: SerialConfig,
+        initial_line_endings: LineEndingConfig,
+        initial_modem: ModemLineSnapshot,
+    ) -> Self {
         Self {
             items: ITEMS,
             selected: 0,
             initial_config,
             initial_line_endings,
+            initial_modem,
         }
     }
 
@@ -115,9 +128,10 @@ impl RootMenu {
 
     /// Handle the Enter key. Exit item closes; the "Serial port setup"
     /// row pushes the real [`SerialPortSetupDialog`] (T12); the "Line
-    /// endings" row pushes the real [`LineEndingsDialog`] (T13);
-    /// everything else still pushes a placeholder until its real
-    /// dialog lands (T14+).
+    /// endings" row pushes the real [`LineEndingsDialog`] (T13); the
+    /// "Modem control" row pushes the real [`ModemControlDialog`]
+    /// (T14); everything else still pushes a placeholder until its
+    /// real dialog lands (T15+).
     fn activate(&self) -> DialogOutcome {
         match self.selected {
             EXIT_INDEX => DialogOutcome::Close,
@@ -126,6 +140,9 @@ impl RootMenu {
             }
             LINE_ENDINGS_INDEX => {
                 DialogOutcome::Push(Box::new(LineEndingsDialog::new(self.initial_line_endings)))
+            }
+            MODEM_CONTROL_INDEX => {
+                DialogOutcome::Push(Box::new(ModemControlDialog::new(self.initial_modem)))
             }
             _ => {
                 let title = self.items[self.selected];
@@ -202,7 +219,11 @@ mod tests {
     }
 
     fn menu() -> RootMenu {
-        RootMenu::new(SerialConfig::default(), LineEndingConfig::default())
+        RootMenu::new(
+            SerialConfig::default(),
+            LineEndingConfig::default(),
+            ModemLineSnapshot::default(),
+        )
     }
 
     #[test]
@@ -288,18 +309,43 @@ mod tests {
             baud_rate: 9600,
             ..SerialConfig::default()
         };
-        let m = RootMenu::new(cfg, LineEndingConfig::default());
+        let m = RootMenu::new(
+            cfg,
+            LineEndingConfig::default(),
+            ModemLineSnapshot::default(),
+        );
         assert_eq!(m.selected(), 0);
     }
 
     #[test]
     fn enter_on_line_endings_pushes_line_endings_dialog() {
-        let mut m = RootMenu::new(SerialConfig::default(), LineEndingConfig::default());
+        let mut m = RootMenu::new(
+            SerialConfig::default(),
+            LineEndingConfig::default(),
+            ModemLineSnapshot::default(),
+        );
         // cursor=0 is Serial port. Move to 1 (Line endings).
         m.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
         let out = m.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         match out {
             DialogOutcome::Push(d) => assert_eq!(d.title(), "Line endings"),
+            _ => panic!("expected Push"),
+        }
+    }
+
+    #[test]
+    fn enter_on_modem_control_pushes_modem_control_dialog() {
+        let mut m = RootMenu::new(
+            SerialConfig::default(),
+            LineEndingConfig::default(),
+            ModemLineSnapshot::default(),
+        );
+        for _ in 0..2 {
+            m.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        }
+        let out = m.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        match out {
+            DialogOutcome::Push(d) => assert_eq!(d.title(), "Modem control"),
             _ => panic!("expected Push"),
         }
     }

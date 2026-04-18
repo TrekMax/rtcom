@@ -99,6 +99,22 @@ pub struct ModemStatus {
     pub cd: bool,
 }
 
+/// Snapshot of the modem output lines as rtcom knows them.
+///
+/// Unlike [`ModemStatus`] (which reflects the input-side lines CTS / DSR /
+/// RI / CD and requires polling the device), the output lines DTR and RTS
+/// are driven by rtcom itself — so the current state is simply whatever
+/// the `Session` last wrote. The TUI modem-control dialog (v0.2 task 14)
+/// consumes this snapshot for its read-only "Current output lines"
+/// display.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ModemLineSnapshot {
+    /// Data Terminal Ready output line: `true` when asserted.
+    pub dtr: bool,
+    /// Request To Send output line: `true` when asserted.
+    pub rts: bool,
+}
+
 /// Full serial-link configuration.
 ///
 /// `SerialConfig` is what the CLI builds from command-line flags (see
@@ -192,5 +208,12 @@ mod tests {
     #[test]
     fn validate_accepts_default() {
         assert!(SerialConfig::default().validate().is_ok());
+    }
+
+    #[test]
+    fn modem_line_snapshot_default_both_false() {
+        let s = ModemLineSnapshot::default();
+        assert!(!s.dtr);
+        assert!(!s.rts);
     }
 }
