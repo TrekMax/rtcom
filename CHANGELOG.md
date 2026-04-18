@@ -52,6 +52,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Line endings dialog now shows inline recipes ("imap = crlf for
   \\n-only devices" etc.) so users don't have to consult the manual
   to translate the minicom rule names.
+- `docs/tui.md` gains a "Line endings recipes" section with
+  symptom→cure guidance for common device behaviors.
 
 ### Deprecated
 

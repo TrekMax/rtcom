@@ -63,6 +63,82 @@ The screen-options dialog (within `^A m`) toggles how overlays render:
 
 The choice persists to the profile's `[screen].modal_style` key.
 
+## Line endings recipes
+
+rtcom's line-ending mappers inherit the minicom / picocom vocabulary,
+which is compact but non-obvious. Here is what each rule does and when
+to use it.
+
+### The rules (all dispatch on the INPUT byte)
+
+| Rule    | Trigger       | Effect                      |
+| ------- | ------------- | --------------------------- |
+| `none`  | —             | pass through unchanged      |
+| `crlf`  | `\n` in input | prepend `\r` → CRLF         |
+| `lfcr`  | `\r` in input | append `\n` → CRLF          |
+| `igncr` | `\r` in input | drop the `\r`               |
+| `ignlf` | `\n` in input | drop the `\n`               |
+
+Both `crlf` and `lfcr` produce CRLF — the difference is **which byte
+triggers them**. If you pick a rule that doesn't match what's in the
+stream, it does nothing. This trips most users at least once.
+
+### Recipes by direction
+
+Set these in the Line endings dialog (`^A m → Line endings`) or by
+hand in `~/.config/rtcom/default.toml`.
+
+#### Receiving from the device (`imap`)
+
+Pick the rule that matches what your device emits:
+
+| Device behavior                                          | `imap`  |
+| -------------------------------------------------------- | ------- |
+| sends `\n` only (most MCUs, Zephyr, Linux-hosted apps)   | `crlf`  |
+| sends `\r` only (old Mac, some DOS tools)                | `lfcr`  |
+| sends `\r\n` (Windows, standard serial)                  | `none`  |
+| spams both and you want clean lines                      | `igncr` |
+
+**Symptom → cure**:
+
+- **Staircase output** (each line indents further right):
+  your device sends `\n` only → set `imap = crlf`.
+- **No newlines at all**, text overwrites itself on one row:
+  device sends `\r` only → set `imap = lfcr`.
+- **Double-spaced output** (blank row between every line):
+  device sends `\r\n` and rtcom is also doubling it → set `imap = none`
+  (or `igncr` if you want to keep only `\n`).
+
+#### Sending to the device (`omap`)
+
+Pick what your device **expects**:
+
+| Device expects                                                     | `omap` |
+| ------------------------------------------------------------------ | ------ |
+| line terminated by `\r\n` (most firmware REPLs, AT-command modems) | `crlf` |
+| line terminated by `\r` (old Mac, some serial consoles)            | `lfcr` |
+| line terminated by `\n` only                                       | `none` |
+
+**Symptom → cure**:
+
+- **Commands don't execute** after pressing Enter:
+  device needs CR → try `omap = crlf` (or `lfcr` if it wants CR only).
+- **Every command runs twice**:
+  you're sending `\r\n` to a device that splits it → set `omap = none`
+  and let the device's CR-on-enter mode handle it.
+
+#### Echo (`emap`)
+
+rtcom v0.2 has no local-echo rendering yet — `emap` is persisted to the
+profile but doesn't affect display. It lands in v0.3's logging module.
+
+### Trying it
+
+After editing the dialog, press `F10` (Apply + Save). Because runtime
+mapper swap is deferred to v0.2.1, the new rule applies on the next
+`rtcom` invocation — **exit** (`^A ^Q`) **and relaunch** to see the
+effect.
+
 ## Profile
 
 The default profile lives at:
