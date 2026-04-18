@@ -12,14 +12,15 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Paragraph, Widget},
 };
+use rtcom_config::ModalStyle;
 use rtcom_core::{LineEndingConfig, ModemLineSnapshot, SerialConfig};
 
 use crate::{
     menu::{
-        line_endings::LineEndingsDialog, modem_control::ModemControlDialog,
-        placeholder::PlaceholderDialog, serial_port::SerialPortSetupDialog,
+        confirm::ConfirmDialog, line_endings::LineEndingsDialog, modem_control::ModemControlDialog,
+        screen_options::ScreenOptionsDialog, serial_port::SerialPortSetupDialog,
     },
-    modal::{Dialog, DialogOutcome},
+    modal::{Dialog, DialogAction, DialogOutcome},
 };
 
 /// Index of the "Serial port setup" item; selecting it drills into
@@ -31,6 +32,17 @@ const LINE_ENDINGS_INDEX: usize = 1;
 /// Index of the "Modem control" item; selecting it drills into the
 /// real [`ModemControlDialog`] (T14).
 const MODEM_CONTROL_INDEX: usize = 2;
+/// Index of the "Write profile" item; selecting it drills into a
+/// [`ConfirmDialog`] that emits [`DialogAction::WriteProfile`] on
+/// confirm (T15).
+const WRITE_PROFILE_INDEX: usize = 3;
+/// Index of the "Read profile" item; selecting it drills into a
+/// [`ConfirmDialog`] that emits [`DialogAction::ReadProfile`] on
+/// confirm (T15).
+const READ_PROFILE_INDEX: usize = 4;
+/// Index of the "Screen options" item; selecting it drills into the
+/// real [`ScreenOptionsDialog`] (T15).
+const SCREEN_OPTIONS_INDEX: usize = 5;
 
 /// Top-level configuration menu (the first real [`Dialog`] impl).
 ///
@@ -53,6 +65,10 @@ pub struct RootMenu {
     /// [`ModemControlDialog::new`] when the user drills into the
     /// "Modem control" row.
     initial_modem: ModemLineSnapshot,
+    /// Snapshot of the live [`ModalStyle`]; forwarded to
+    /// [`ScreenOptionsDialog::new`] when the user drills into the
+    /// "Screen options" row (T15).
+    initial_modal_style: ModalStyle,
 }
 
 const ITEMS: &[&str] = &[
@@ -75,15 +91,16 @@ const SEPARATORS_AFTER: &[usize] = &[2, 4];
 
 impl RootMenu {
     /// Construct a root menu with the cursor on the first item and
-    /// snapshotting `initial_config`, `initial_line_endings`, and
-    /// `initial_modem` for forwarding to sub-dialogs (currently
-    /// [`SerialPortSetupDialog`], [`LineEndingsDialog`], and
-    /// [`ModemControlDialog`]).
+    /// snapshotting `initial_config`, `initial_line_endings`,
+    /// `initial_modem`, and `initial_modal_style` for forwarding to
+    /// sub-dialogs ([`SerialPortSetupDialog`], [`LineEndingsDialog`],
+    /// [`ModemControlDialog`], and [`ScreenOptionsDialog`]).
     #[must_use]
     pub const fn new(
         initial_config: SerialConfig,
         initial_line_endings: LineEndingConfig,
         initial_modem: ModemLineSnapshot,
+        initial_modal_style: ModalStyle,
     ) -> Self {
         Self {
             items: ITEMS,
@@ -91,6 +108,7 @@ impl RootMenu {
             initial_config,
             initial_line_endings,
             initial_modem,
+            initial_modal_style,
         }
     }
 
@@ -126,12 +144,11 @@ impl RootMenu {
         }
     }
 
-    /// Handle the Enter key. Exit item closes; the "Serial port setup"
-    /// row pushes the real [`SerialPortSetupDialog`] (T12); the "Line
-    /// endings" row pushes the real [`LineEndingsDialog`] (T13); the
-    /// "Modem control" row pushes the real [`ModemControlDialog`]
-    /// (T14); everything else still pushes a placeholder until its
-    /// real dialog lands (T15+).
+    /// Handle the Enter key. Exit item closes; every other row pushes
+    /// its associated dialog: [`SerialPortSetupDialog`] (T12),
+    /// [`LineEndingsDialog`] (T13), [`ModemControlDialog`] (T14),
+    /// [`ConfirmDialog`] (write/read profile, T15),
+    /// [`ScreenOptionsDialog`] (T15).
     fn activate(&self) -> DialogOutcome {
         match self.selected {
             EXIT_INDEX => DialogOutcome::Close,
@@ -144,9 +161,22 @@ impl RootMenu {
             MODEM_CONTROL_INDEX => {
                 DialogOutcome::Push(Box::new(ModemControlDialog::new(self.initial_modem)))
             }
+            WRITE_PROFILE_INDEX => DialogOutcome::Push(Box::new(ConfirmDialog::new(
+                "Write profile",
+                "Save current configuration to profile file on disk?",
+                DialogAction::WriteProfile,
+            ))),
+            READ_PROFILE_INDEX => DialogOutcome::Push(Box::new(ConfirmDialog::new(
+                "Read profile",
+                "Reload profile from disk? Unsaved changes will be lost.",
+                DialogAction::ReadProfile,
+            ))),
+            SCREEN_OPTIONS_INDEX => {
+                DialogOutcome::Push(Box::new(ScreenOptionsDialog::new(self.initial_modal_style)))
+            }
             _ => {
                 let title = self.items[self.selected];
-                DialogOutcome::Push(Box::new(PlaceholderDialog::new(title)))
+                DialogOutcome::Push(Box::new(crate::menu::PlaceholderDialog::new(title)))
             }
         }
     }
@@ -223,6 +253,7 @@ mod tests {
             SerialConfig::default(),
             LineEndingConfig::default(),
             ModemLineSnapshot::default(),
+            ModalStyle::default(),
         )
     }
 
@@ -313,20 +344,17 @@ mod tests {
             cfg,
             LineEndingConfig::default(),
             ModemLineSnapshot::default(),
+            ModalStyle::default(),
         );
         assert_eq!(m.selected(), 0);
     }
 
     #[test]
     fn enter_on_line_endings_pushes_line_endings_dialog() {
-        let mut m = RootMenu::new(
-            SerialConfig::default(),
-            LineEndingConfig::default(),
-            ModemLineSnapshot::default(),
-        );
+        let mut m = menu();
         // cursor=0 is Serial port. Move to 1 (Line endings).
-        m.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
-        let out = m.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        m.handle_key(key(KeyCode::Down));
+        let out = m.handle_key(key(KeyCode::Enter));
         match out {
             DialogOutcome::Push(d) => assert_eq!(d.title(), "Line endings"),
             _ => panic!("expected Push"),
@@ -335,17 +363,52 @@ mod tests {
 
     #[test]
     fn enter_on_modem_control_pushes_modem_control_dialog() {
-        let mut m = RootMenu::new(
-            SerialConfig::default(),
-            LineEndingConfig::default(),
-            ModemLineSnapshot::default(),
-        );
+        let mut m = menu();
         for _ in 0..2 {
-            m.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+            m.handle_key(key(KeyCode::Down));
         }
-        let out = m.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let out = m.handle_key(key(KeyCode::Enter));
         match out {
             DialogOutcome::Push(d) => assert_eq!(d.title(), "Modem control"),
+            _ => panic!("expected Push"),
+        }
+    }
+
+    #[test]
+    fn enter_on_write_profile_pushes_confirm_dialog() {
+        let mut m = menu();
+        for _ in 0..3 {
+            m.handle_key(key(KeyCode::Down));
+        }
+        let out = m.handle_key(key(KeyCode::Enter));
+        match out {
+            DialogOutcome::Push(d) => assert_eq!(d.title(), "Write profile"),
+            _ => panic!("expected Push"),
+        }
+    }
+
+    #[test]
+    fn enter_on_read_profile_pushes_confirm_dialog() {
+        let mut m = menu();
+        for _ in 0..4 {
+            m.handle_key(key(KeyCode::Down));
+        }
+        let out = m.handle_key(key(KeyCode::Enter));
+        match out {
+            DialogOutcome::Push(d) => assert_eq!(d.title(), "Read profile"),
+            _ => panic!("expected Push"),
+        }
+    }
+
+    #[test]
+    fn enter_on_screen_options_pushes_screen_options_dialog() {
+        let mut m = menu();
+        for _ in 0..5 {
+            m.handle_key(key(KeyCode::Down));
+        }
+        let out = m.handle_key(key(KeyCode::Enter));
+        match out {
+            DialogOutcome::Push(d) => assert_eq!(d.title(), "Screen options"),
             _ => panic!("expected Push"),
         }
     }

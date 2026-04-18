@@ -5,6 +5,7 @@
 use crossterm::event::KeyEvent;
 use ratatui::{buffer::Buffer, layout::Rect};
 
+use rtcom_config::ModalStyle;
 use rtcom_core::{LineEndingConfig, SerialConfig};
 
 /// What a [`Dialog`] wants the surrounding [`ModalStack`] to do after
@@ -60,6 +61,12 @@ pub enum DialogAction {
     WriteProfile,
     /// Reload profile from disk (discards unsaved live changes).
     ReadProfile,
+    /// Apply the given [`ModalStyle`] to the live session immediately
+    /// (F2 path from the Screen-options dialog).
+    ApplyModalStyleLive(ModalStyle),
+    /// Apply the given [`ModalStyle`] to the live session *and* persist
+    /// it to profile (F10 path from the Screen-options dialog).
+    ApplyModalStyleAndSave(ModalStyle),
 }
 
 /// A full-screen or modal dialog rendered over the main TUI chrome.

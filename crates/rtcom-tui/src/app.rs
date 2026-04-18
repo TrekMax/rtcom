@@ -7,6 +7,7 @@ use ratatui::{
     widgets::Paragraph,
     Frame,
 };
+use rtcom_config::ModalStyle;
 use rtcom_core::{
     command::{Command, CommandKeyParser, ParseOutput},
     Event, EventBus, LineEndingConfig, ModemLineSnapshot, SerialConfig,
@@ -55,6 +56,12 @@ pub struct TuiApp {
     /// instances so the T14 [`crate::menu::ModemControlDialog`] opens
     /// with live values.
     current_modem: ModemLineSnapshot,
+    /// Current modal render style; seeded to [`ModalStyle::default`]
+    /// at construction and updated by
+    /// [`TuiApp::set_modal_style`]. Forwarded into new [`RootMenu`]
+    /// instances so the T15 [`crate::menu::ScreenOptionsDialog`] opens
+    /// with the live value.
+    current_modal_style: ModalStyle,
 }
 
 impl TuiApp {
@@ -79,6 +86,7 @@ impl TuiApp {
             current_config: SerialConfig::default(),
             current_line_endings: LineEndingConfig::default(),
             current_modem: ModemLineSnapshot::default(),
+            current_modal_style: ModalStyle::default(),
         }
     }
 
@@ -109,6 +117,16 @@ impl TuiApp {
     /// change (T17 wires this into the `SetDtr` / `SetRts` paths).
     pub const fn set_modem_lines(&mut self, snapshot: ModemLineSnapshot) {
         self.current_modem = snapshot;
+    }
+
+    /// Update the cached [`ModalStyle`] that new [`RootMenu`] pushes
+    /// pass down to the T15 [`crate::menu::ScreenOptionsDialog`].
+    ///
+    /// Call this whenever the live modal-style preference changes
+    /// (T17 wires this into the `ApplyModalStyleLive` / `AndSave`
+    /// paths).
+    pub const fn set_modal_style(&mut self, style: ModalStyle) {
+        self.current_modal_style = style;
     }
 
     /// Whether the configuration menu is currently open.
@@ -198,6 +216,7 @@ impl TuiApp {
                         self.current_config,
                         self.current_line_endings,
                         self.current_modem,
+                        self.current_modal_style,
                     )));
                     let _ = self.bus.publish(Event::MenuOpened);
                     return Dispatch::OpenedMenu;
