@@ -46,6 +46,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **BREAKING**: rtcom now requires a real TTY on stdin/stdout; piping
   through a non-TTY process no longer works.
 - **BREAKING**: the v0.1 stdout line-by-line renderer is removed.
+- **MSRV bumped from 1.85 to 1.86** as a consequence of the ratatui
+  0.30 upgrade (see Security / Dependencies below).
 - `rtcom-cli` no longer owns the terminal lifecycle — delegated to
   `rtcom-tui`.
 - `crossterm` bumped from 0.27 to 0.28 (ratatui transitive unification).
@@ -60,6 +62,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to translate the minicom rule names.
 - `docs/tui.md` gains a "Line endings recipes" section with
   symptom→cure guidance for common device behaviors.
+
+### Security / Dependencies
+
+- Upgraded `ratatui` `0.28` → `0.30` and `tui-term` `0.1` → `0.3` to
+  pick up `lru 0.16.3+`, which patches [GHSA-rhfx-m35p-ff5j]
+  (`IterMut` Stacked Borrows soundness; CVSS v4 LOW 2.7). `lru` is a
+  transitive dep via ratatui-core; the advisory is not reachable from
+  rtcom's own code but the fix flows in automatically. Also pulls
+  `vt100` `0.15` → `0.16` to match tui-term 0.3's `Screen` trait
+  bound. MSRV bumped from 1.85 to 1.86 as a consequence.
+
+[GHSA-rhfx-m35p-ff5j]: https://github.com/advisories/GHSA-rhfx-m35p-ff5j
 
 ### Deprecated
 
