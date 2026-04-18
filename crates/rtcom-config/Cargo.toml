@@ -1,12 +1,15 @@
 [package]
 name = "rtcom-config"
-description = "Profile persistence for rtcom"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
+description = "Profile persistence for rtcom, the Rust terminal communication tool."
+readme = "../../README.md"
+keywords = ["serial", "terminal", "config", "profile", "rtcom"]
+categories = ["config", "hardware-support"]
 
 [lints]
 workspace = true
