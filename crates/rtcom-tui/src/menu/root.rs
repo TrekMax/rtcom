@@ -1,7 +1,7 @@
 //! Top-level configuration menu.
 //!
 //! Seven items, arrow / vim navigation with wrap, Enter drills into
-//! child dialogs (placeholders until T12+). Esc or the "Exit menu"
+//! child dialogs (placeholders until T14+). Esc or the "Exit menu"
 //! item closes the menu.
 
 use crossterm::event::{KeyCode, KeyEvent};
@@ -15,30 +15,36 @@ use ratatui::{
 use rtcom_core::{LineEndingConfig, SerialConfig};
 
 use crate::{
-    menu::{placeholder::PlaceholderDialog, serial_port::SerialPortSetupDialog},
+    menu::{
+        line_endings::LineEndingsDialog, placeholder::PlaceholderDialog,
+        serial_port::SerialPortSetupDialog,
+    },
     modal::{Dialog, DialogOutcome},
 };
 
 /// Index of the "Serial port setup" item; selecting it drills into
 /// the real [`SerialPortSetupDialog`] (T12).
 const SERIAL_PORT_SETUP_INDEX: usize = 0;
+/// Index of the "Line endings" item; selecting it drills into the
+/// real [`LineEndingsDialog`] (T13).
+const LINE_ENDINGS_INDEX: usize = 1;
 
 /// Top-level configuration menu (the first real [`Dialog`] impl).
 ///
 /// Owns a fixed list of seven entries, an integer cursor, a snapshot
-/// of the current [`SerialConfig`] (passed on to sub-dialogs), and a
-/// rendering style. Emits [`DialogOutcome::Push`] for every non-exit
-/// selection and [`DialogOutcome::Close`] for Esc / "Exit menu".
+/// of the current [`SerialConfig`] / [`LineEndingConfig`] (passed on
+/// to sub-dialogs), and a rendering style. Emits
+/// [`DialogOutcome::Push`] for every non-exit selection and
+/// [`DialogOutcome::Close`] for Esc / "Exit menu".
 pub struct RootMenu {
     items: &'static [&'static str],
     selected: usize,
     /// Snapshot of the live [`SerialConfig`]; forwarded to
     /// [`SerialPortSetupDialog::new`] when the user drills in.
     initial_config: SerialConfig,
-    /// Snapshot of the live [`LineEndingConfig`]; GREEN commit
-    /// forwards it to `LineEndingsDialog::new` when the user drills
-    /// into the "Line endings" row.
-    #[allow(dead_code, reason = "GREEN commit wires this into activate()")]
+    /// Snapshot of the live [`LineEndingConfig`]; forwarded to
+    /// [`LineEndingsDialog::new`] when the user drills into the
+    /// "Line endings" row.
     initial_line_endings: LineEndingConfig,
 }
 
@@ -64,7 +70,7 @@ impl RootMenu {
     /// Construct a root menu with the cursor on the first item and
     /// snapshotting `initial_config` + `initial_line_endings` for
     /// forwarding to sub-dialogs (currently [`SerialPortSetupDialog`]
-    /// and the GREEN-commit `LineEndingsDialog`).
+    /// and [`LineEndingsDialog`]).
     #[must_use]
     pub const fn new(initial_config: SerialConfig, initial_line_endings: LineEndingConfig) -> Self {
         Self {
@@ -108,14 +114,18 @@ impl RootMenu {
     }
 
     /// Handle the Enter key. Exit item closes; the "Serial port setup"
-    /// row pushes the real [`SerialPortSetupDialog`] (T12); everything
-    /// else still pushes a placeholder until its real dialog lands
-    /// (T13+).
+    /// row pushes the real [`SerialPortSetupDialog`] (T12); the "Line
+    /// endings" row pushes the real [`LineEndingsDialog`] (T13);
+    /// everything else still pushes a placeholder until its real
+    /// dialog lands (T14+).
     fn activate(&self) -> DialogOutcome {
         match self.selected {
             EXIT_INDEX => DialogOutcome::Close,
             SERIAL_PORT_SETUP_INDEX => {
                 DialogOutcome::Push(Box::new(SerialPortSetupDialog::new(self.initial_config)))
+            }
+            LINE_ENDINGS_INDEX => {
+                DialogOutcome::Push(Box::new(LineEndingsDialog::new(self.initial_line_endings)))
             }
             _ => {
                 let title = self.items[self.selected];

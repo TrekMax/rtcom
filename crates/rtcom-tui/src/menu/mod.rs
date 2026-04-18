@@ -3,9 +3,10 @@
 //! The entry point is [`RootMenu`], a seven-item top-level menu
 //! pushed onto the [`crate::modal::ModalStack`] when the user opens
 //! the configuration menu (`^A m`). Each item drills into a child
-//! dialog (serial-port setup, line endings, ...). For v0.2 task 11
-//! every child is a [`PlaceholderDialog`]; later tasks (T12+) replace
-//! them with real dialogs.
+//! dialog (serial-port setup, line endings, ...). T12 replaced the
+//! first row with a real [`SerialPortSetupDialog`]; T13 does the
+//! same for "Line endings" via [`LineEndingsDialog`]; the remaining
+//! rows are still [`PlaceholderDialog`]s until T14+ lands.
 
 pub mod line_endings;
 pub mod placeholder;
