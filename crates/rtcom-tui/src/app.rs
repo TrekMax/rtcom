@@ -1,29 +1,34 @@
 //! Top-level TUI application object.
 
+use crossterm::event::KeyEvent;
 use ratatui::{
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::Paragraph,
     Frame,
 };
-use rtcom_core::EventBus;
+use rtcom_core::{
+    command::{Command, CommandKeyParser, ParseOutput},
+    Event, EventBus,
+};
 use tui_term::widget::PseudoTerminal;
 
-use crate::{layout::main_chrome, serial_pane::SerialPane};
+use crate::{input::Dispatch, layout::main_chrome, serial_pane::SerialPane};
 
 /// Owns the TUI render state and input dispatcher.
 ///
 /// Tracks the serial data pane, the configuration-menu open/closed
 /// state, and a lightweight device summary shown on the top bar.
-/// Input handling and the menu overlay are added in follow-up tasks.
+/// Input handling lives in [`TuiApp::handle_key`], which routes
+/// keyboard events through an internal [`CommandKeyParser`] whenever
+/// the menu is closed.
 pub struct TuiApp {
-    // Kept for later tasks (T9+) which will subscribe / publish events.
-    #[allow(dead_code)]
     bus: EventBus,
     menu_open: bool,
     serial_pane: SerialPane,
     device_path: String,
     config_summary: String,
+    parser: CommandKeyParser,
 }
 
 impl TuiApp {
@@ -40,6 +45,7 @@ impl TuiApp {
             serial_pane: SerialPane::new(24, 80),
             device_path: String::new(),
             config_summary: String::new(),
+            parser: CommandKeyParser::default(),
         }
     }
 
@@ -74,6 +80,64 @@ impl TuiApp {
     #[allow(dead_code)]
     pub(crate) const fn bus(&self) -> &EventBus {
         &self.bus
+    }
+
+    /// Route a key event.
+    ///
+    /// When the menu is closed, the event is converted to bytes via
+    /// [`crate::input::key_to_bytes`] and fed one byte at a time to
+    /// the internal [`CommandKeyParser`]:
+    ///
+    /// - [`ParseOutput::Data`] bytes accumulate into a
+    ///   [`Dispatch::TxBytes`] payload.
+    /// - [`Command::OpenMenu`] flips `menu_open` and publishes
+    ///   [`Event::MenuOpened`] on the bus, then returns
+    ///   [`Dispatch::OpenedMenu`].
+    /// - [`Command::Quit`] returns [`Dispatch::Quit`].
+    /// - Any other [`Command`] is published on the bus as
+    ///   [`Event::Command`]; the dispatcher returns [`Dispatch::Noop`]
+    ///   (T17 refactors this into direct `Session` handles).
+    ///
+    /// When the menu is open, T9 currently swallows the input and
+    /// returns [`Dispatch::Noop`]. T10+ will forward the event to the
+    /// `ModalStack`.
+    pub fn handle_key(&mut self, key: KeyEvent) -> Dispatch {
+        if self.menu_open {
+            // T10+ will forward this to modal_stack.handle_key(...).
+            return Dispatch::Noop;
+        }
+
+        let bytes = crate::input::key_to_bytes(key);
+        if bytes.is_empty() {
+            return Dispatch::Noop;
+        }
+
+        let mut tx = Vec::new();
+        for &b in &bytes {
+            match self.parser.feed(b) {
+                ParseOutput::None => {}
+                ParseOutput::Data(data_byte) => tx.push(data_byte),
+                ParseOutput::Command(Command::OpenMenu) => {
+                    self.menu_open = true;
+                    let _ = self.bus.publish(Event::MenuOpened);
+                    return Dispatch::OpenedMenu;
+                }
+                ParseOutput::Command(Command::Quit) => {
+                    return Dispatch::Quit;
+                }
+                ParseOutput::Command(cmd) => {
+                    // Forward all other commands onto the bus; T17
+                    // refactors this into direct Session handles.
+                    let _ = self.bus.publish(Event::Command(cmd));
+                }
+            }
+        }
+
+        if tx.is_empty() {
+            Dispatch::Noop
+        } else {
+            Dispatch::TxBytes(tx)
+        }
     }
 
     /// Render the main screen into `f`.
@@ -160,7 +224,7 @@ mod tests {
 
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-    fn key(code: KeyCode, mods: KeyModifiers) -> KeyEvent {
+    const fn key(code: KeyCode, mods: KeyModifiers) -> KeyEvent {
         KeyEvent::new(code, mods)
     }
 
