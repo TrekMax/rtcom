@@ -4,8 +4,11 @@
 //! struct mirrors what `clap` reads from `argv`; [`Cli::to_serial_config`]
 //! projects it into [`rtcom_core::SerialConfig`] for the session layer.
 
+use std::path::PathBuf;
+
 use clap::{ArgAction, Parser, ValueEnum};
 
+use rtcom_config::Profile;
 use rtcom_core::{
     DataBits, FlowControl, LineEnding, Parity, SerialConfig, StopBits, DEFAULT_READ_TIMEOUT,
 };
@@ -31,41 +34,44 @@ pub struct Cli {
     /// Serial device path, e.g. `/dev/ttyUSB0` (Linux) or `COM3` (Windows).
     pub device: String,
 
-    /// Baud rate in bits per second. `None` means "use the default"
-    /// (the upcoming profile layer substitutes a persisted value when
-    /// one is configured; otherwise 115200).
+    /// Baud rate in bits per second. When omitted, rtcom uses the profile's
+    /// value (default profile: 115200).
     #[arg(short, long, value_name = "RATE")]
     pub baud: Option<u32>,
 
-    /// Data bits per frame. `None` → default (8).
+    /// Data bits per frame. When omitted, rtcom uses the profile's value
+    /// (default profile: 8).
     #[arg(short = 'd', long = "databits", value_enum, value_name = "BITS")]
     pub data_bits: Option<CliDataBits>,
 
-    /// Stop bits per frame. `None` → default (1).
+    /// Stop bits per frame. When omitted, rtcom uses the profile's value
+    /// (default profile: 1).
     #[arg(short = 's', long = "stopbits", value_enum, value_name = "BITS")]
     pub stop_bits: Option<CliStopBits>,
 
-    /// Parity mode. `None` → default (none).
+    /// Parity mode. When omitted, rtcom uses the profile's value (default
+    /// profile: none).
     #[arg(short = 'p', long, value_enum, value_name = "MODE")]
     pub parity: Option<CliParity>,
 
-    /// Flow-control mode. `None` → default (none).
+    /// Flow-control mode. When omitted, rtcom uses the profile's value
+    /// (default profile: none).
     #[arg(short = 'f', long, value_enum, value_name = "MODE")]
     pub flow: Option<CliFlow>,
 
     /// Outbound line-ending mapping. See [`CliLineEnding`] for the rules.
-    /// `None` → default (no transformation).
+    /// When omitted, rtcom uses the profile's value (default profile: none).
     #[arg(long, value_enum, value_name = "RULE")]
     pub omap: Option<CliLineEnding>,
 
     /// Inbound line-ending mapping. See [`CliLineEnding`] for the rules.
-    /// `None` → default (no transformation).
+    /// When omitted, rtcom uses the profile's value (default profile: none).
     #[arg(long, value_enum, value_name = "RULE")]
     pub imap: Option<CliLineEnding>,
 
     /// Echo line-ending mapping. Accepted for parity with picocom; the
-    /// echo path itself wires up in a later issue.
-    /// `None` → default (no transformation).
+    /// echo path itself wires up in a later issue. When omitted, rtcom
+    /// uses the profile's value (default profile: none).
     #[arg(long, value_enum, value_name = "RULE")]
     pub emap: Option<CliLineEnding>,
 
@@ -118,24 +124,129 @@ pub struct Cli {
     /// Increase diagnostic verbosity (repeatable: `-v`, `-vv`, `-vvv`).
     #[arg(short, long, action = ArgAction::Count)]
     pub verbose: u8,
+
+    /// Path to the profile TOML file. When omitted, rtcom uses the platform
+    /// default (`$XDG_CONFIG_HOME/rtcom/default.toml` on Linux, equivalent
+    /// on macOS / Windows).
+    #[arg(short = 'c', long = "config", value_name = "PATH")]
+    pub config: Option<PathBuf>,
+
+    /// Write the effective configuration back to the profile on startup.
+    /// Merges CLI-provided fields over the loaded profile, then persists
+    /// the result before starting the session. Fails hard when no profile
+    /// path is available (no `-c PATH` and no discoverable home).
+    #[arg(long = "save")]
+    pub save: bool,
 }
 
 impl Cli {
     /// Projects the parsed arguments into the [`SerialConfig`] consumed by
-    /// `rtcom-core`. Unspecified fields resolve to the historical CLI
-    /// defaults (115200 / 8N1 / no flow control) — the upcoming profile
-    /// layer will replace this inline fallback with profile-driven
-    /// merging.
+    /// `rtcom-core`, resolving each field with the merge rule
+    /// `defaults < profile < CLI`.
+    ///
+    /// For every profile-backed field, a `Some(_)` on the CLI wins;
+    /// otherwise the corresponding `profile.serial` value is used.
+    /// Unknown strings in the profile (e.g. hand-edited garbage) fall
+    /// through to the CLI/core default rather than panicking.
     #[must_use]
-    pub fn to_serial_config(&self) -> SerialConfig {
+    pub fn to_serial_config(&self, profile: &Profile) -> SerialConfig {
         SerialConfig {
-            baud_rate: self.baud.unwrap_or(115_200),
-            data_bits: self.data_bits.unwrap_or(CliDataBits::Eight).into(),
-            stop_bits: self.stop_bits.unwrap_or(CliStopBits::One).into(),
-            parity: self.parity.unwrap_or(CliParity::None).into(),
-            flow_control: self.flow.unwrap_or(CliFlow::None).into(),
+            baud_rate: self.baud.unwrap_or(profile.serial.baud),
+            data_bits: self.data_bits.map_or_else(
+                || data_bits_from_profile(profile.serial.data_bits),
+                Into::into,
+            ),
+            stop_bits: self.stop_bits.map_or_else(
+                || stop_bits_from_profile(profile.serial.stop_bits),
+                Into::into,
+            ),
+            parity: self
+                .parity
+                .map_or_else(|| parity_from_profile(&profile.serial.parity), Into::into),
+            flow_control: self
+                .flow
+                .map_or_else(|| flow_from_profile(&profile.serial.flow), Into::into),
             read_timeout: DEFAULT_READ_TIMEOUT,
         }
+    }
+
+    /// Resolves the outbound line-ending rule with CLI > profile > none.
+    #[must_use]
+    pub fn resolved_omap(&self, profile: &Profile) -> LineEnding {
+        self.omap.map_or_else(
+            || line_ending_from_profile(&profile.line_endings.omap),
+            Into::into,
+        )
+    }
+
+    /// Resolves the inbound line-ending rule with CLI > profile > none.
+    #[must_use]
+    pub fn resolved_imap(&self, profile: &Profile) -> LineEnding {
+        self.imap.map_or_else(
+            || line_ending_from_profile(&profile.line_endings.imap),
+            Into::into,
+        )
+    }
+
+    // Note: `emap` has no runtime wire-up yet (the echo path lands in a
+    // later issue), so there's no `resolved_emap` here. The field is
+    // parsed for picocom parity and round-tripped through `--save` via
+    // the profile layer once the menu-editable line-endings task
+    // (Task 13) wires it through.
+}
+
+/// Translates a profile-string parity (`"none"`, `"even"`, ...) into the core
+/// enum. Unknown strings fall through to [`Parity::None`] rather than
+/// erroring — hand-edited TOML must never crash rtcom.
+fn parity_from_profile(s: &str) -> Parity {
+    match s.to_ascii_lowercase().as_str() {
+        "even" => Parity::Even,
+        "odd" => Parity::Odd,
+        "mark" => Parity::Mark,
+        "space" => Parity::Space,
+        _ => Parity::None,
+    }
+}
+
+/// Translates a profile-string flow-control mode (`"none"`, `"hw"`, `"sw"`)
+/// into the core enum. Unknown strings fall through to [`FlowControl::None`].
+fn flow_from_profile(s: &str) -> FlowControl {
+    match s.to_ascii_lowercase().as_str() {
+        "hw" | "hardware" | "rtscts" => FlowControl::Hardware,
+        "sw" | "software" | "xonxoff" => FlowControl::Software,
+        _ => FlowControl::None,
+    }
+}
+
+/// Translates a profile-numeric data-bits value into the core enum. Values
+/// outside 5..=8 fall through to 8.
+const fn data_bits_from_profile(n: u8) -> DataBits {
+    match n {
+        5 => DataBits::Five,
+        6 => DataBits::Six,
+        7 => DataBits::Seven,
+        _ => DataBits::Eight,
+    }
+}
+
+/// Translates a profile-numeric stop-bits value into the core enum. Values
+/// outside {1, 2} fall through to 1.
+const fn stop_bits_from_profile(n: u8) -> StopBits {
+    match n {
+        2 => StopBits::Two,
+        _ => StopBits::One,
+    }
+}
+
+/// Translates a profile-string line-ending rule into the core enum.
+/// Unknown strings fall through to [`LineEnding::None`].
+fn line_ending_from_profile(s: &str) -> LineEnding {
+    match s.to_ascii_lowercase().as_str() {
+        "crlf" => LineEnding::AddCrToLf,
+        "lfcr" => LineEnding::AddLfToCr,
+        "igncr" => LineEnding::DropCr,
+        "ignlf" => LineEnding::DropLf,
+        _ => LineEnding::None,
     }
 }
 
@@ -216,10 +327,9 @@ impl From<CliParity> for Parity {
 
 /// CLI-facing line-ending mapping enum (used by `--omap`, `--imap`,
 /// `--emap`). Names follow the picocom convention.
-#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, ValueEnum)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
 pub enum CliLineEnding {
     /// No transformation (default).
-    #[default]
     None,
     /// LF → CRLF (picocom `crlf`).
     Crlf,
@@ -306,9 +416,8 @@ mod tests {
     fn default_values_are_115200_8n1() {
         let cli = Cli::parse_from(["rtcom", "/dev/ttyUSB0"]);
         assert_eq!(cli.device, "/dev/ttyUSB0");
-        // Profile-backed fields default to `None` so a profile layer
-        // (landing in the next commit) can tell "user omitted the flag"
-        // from "user explicitly passed the historical default".
+        // Profile-backed fields default to None when unspecified so the
+        // profile layer (or its built-in defaults) can fill them in.
         assert_eq!(cli.baud, None);
         assert_eq!(cli.data_bits, None);
         assert_eq!(cli.stop_bits, None);
@@ -479,8 +588,8 @@ mod tests {
     #[test]
     fn line_ending_options_default_to_none() {
         let cli = Cli::parse_from(["rtcom", "/dev/x"]);
-        // `None` means "caller didn't specify", not `CliLineEnding::None`.
-        // Downstream code resolves unspecified to "no transformation".
+        // With profile merging, an unspecified map on the CLI now means
+        // "take from profile, else none" — represented as `None` here.
         assert_eq!(cli.omap, None);
         assert_eq!(cli.imap, None);
         assert_eq!(cli.emap, None);
@@ -515,11 +624,78 @@ mod tests {
         let cli = Cli::parse_from([
             "rtcom", "/dev/x", "-b", "57600", "-d", "7", "-s", "2", "-p", "even", "-f", "sw",
         ]);
-        let cfg = cli.to_serial_config();
+        let profile = rtcom_config::Profile::default();
+        let cfg = cli.to_serial_config(&profile);
         assert_eq!(cfg.baud_rate, 57_600);
         assert_eq!(cfg.data_bits, DataBits::Seven);
         assert_eq!(cfg.stop_bits, StopBits::Two);
         assert_eq!(cfg.parity, Parity::Even);
         assert_eq!(cfg.flow_control, FlowControl::Software);
+    }
+
+    #[test]
+    fn to_serial_config_falls_back_to_profile_when_cli_unspecified() {
+        // CLI omits everything — profile values win (defaults < profile).
+        let cli = Cli::parse_from(["rtcom", "/dev/x"]);
+        let mut profile = rtcom_config::Profile::default();
+        profile.serial.baud = 9600;
+        profile.serial.parity = "even".into();
+        profile.serial.flow = "hw".into();
+        let cfg = cli.to_serial_config(&profile);
+        assert_eq!(cfg.baud_rate, 9600);
+        assert_eq!(cfg.parity, Parity::Even);
+        assert_eq!(cfg.flow_control, FlowControl::Hardware);
+    }
+
+    #[test]
+    fn to_serial_config_cli_overrides_profile() {
+        // CLI fields win over profile (profile < CLI).
+        let cli = Cli::parse_from(["rtcom", "/dev/x", "-b", "460800"]);
+        let mut profile = rtcom_config::Profile::default();
+        profile.serial.baud = 9600;
+        let cfg = cli.to_serial_config(&profile);
+        assert_eq!(cfg.baud_rate, 460_800);
+    }
+
+    #[test]
+    fn to_serial_config_tolerates_unknown_profile_strings() {
+        // Malformed profile strings fall through to defaults rather
+        // than panicking — user-edited TOML shouldn't ever crash rtcom.
+        let cli = Cli::parse_from(["rtcom", "/dev/x"]);
+        let mut profile = rtcom_config::Profile::default();
+        profile.serial.parity = "bogus".into();
+        profile.serial.flow = "also-bogus".into();
+        let cfg = cli.to_serial_config(&profile);
+        assert_eq!(cfg.parity, Parity::None);
+        assert_eq!(cfg.flow_control, FlowControl::None);
+    }
+
+    // -------- New flags (Task 3) --------
+
+    #[test]
+    fn cli_accepts_config_path() {
+        let args = Cli::try_parse_from(["rtcom", "/dev/ttyUSB0", "-c", "/tmp/alt.toml"]).unwrap();
+        assert_eq!(
+            args.config.as_deref(),
+            Some(std::path::Path::new("/tmp/alt.toml"))
+        );
+    }
+
+    #[test]
+    fn cli_save_flag_requires_device() {
+        let err = Cli::try_parse_from(["rtcom", "--save"]).unwrap_err();
+        // clap rejects because positional `device` is required.
+        let msg = err.to_string().to_lowercase();
+        assert!(
+            msg.contains("device") || msg.contains("required"),
+            "unexpected clap error: {err}"
+        );
+    }
+
+    #[test]
+    fn cli_save_with_device_parses() {
+        let args = Cli::try_parse_from(["rtcom", "/dev/ttyUSB0", "-b", "9600", "--save"]).unwrap();
+        assert!(args.save);
+        assert_eq!(args.baud, Some(9600));
     }
 }

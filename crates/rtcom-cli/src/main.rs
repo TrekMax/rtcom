@@ -31,9 +31,11 @@ mod terminal;
 mod tty;
 
 use std::io::{self, IsTerminal};
+use std::path::Path;
 use std::process::ExitCode;
 
 use clap::Parser;
+use rtcom_config::Profile;
 use rtcom_core::{LineEndingMapper, SerialDevice, SerialPortDevice, Session, UucpLock};
 use tracing_subscriber::EnvFilter;
 
@@ -47,8 +49,52 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
     init_tracing(cli.verbose);
 
+    // Resolve the profile path: CLI `-c PATH` wins; otherwise fall back
+    // to the XDG default. `None` means no home dir was discoverable —
+    // profile-save then becomes a hard error.
+    let profile_path = cli
+        .config
+        .clone()
+        .or_else(rtcom_config::default_profile_path);
+
+    // Load the profile with "missing file is fine, malformed is a warn".
+    // Hard-failing on an unreadable profile would turn a rarely-touched
+    // TOML quirk into a total outage — users on CI with no `$HOME` or
+    // typos in their profile should still be able to `rtcom /dev/ttyUSB0`.
+    let profile = load_profile(profile_path.as_deref(), cli.quiet);
+
+    let serial_cfg = cli.to_serial_config(&profile);
+
+    if cli.save {
+        let Some(path) = profile_path.as_ref() else {
+            eprintln!(
+                "rtcom: --save requested but no profile path is available \
+                 (pass `-c PATH` or set HOME/XDG_CONFIG_HOME)"
+            );
+            return ExitCode::from(1);
+        };
+        // Clone so we keep the loaded `profile` around for the session
+        // path (`cli.resolved_omap(&profile)` etc.). Only the serial
+        // section gets overwritten on --save; other sections pass
+        // through unchanged (line_endings, modem, screen will become
+        // menu-editable in a later task).
+        let updated = Profile {
+            serial: serial_config_to_section(&serial_cfg),
+            line_endings: profile.line_endings.clone(),
+            modem: profile.modem.clone(),
+            screen: profile.screen.clone(),
+        };
+        if let Err(err) = rtcom_config::write(path, &updated) {
+            eprintln!("rtcom: --save failed: {err}");
+            return ExitCode::from(1);
+        }
+        if !cli.quiet {
+            eprintln!("rtcom: saved profile to {}", path.display());
+        }
+    }
+
     if !cli.quiet {
-        print_config_summary(&cli);
+        print_config_summary(&cli, &serial_cfg);
         if io::stdin().is_terminal() {
             // Raw mode swallows Ctrl-C (it is forwarded to the wire as
             // a regular 0x03 byte, matching picocom/tio). Users who
@@ -97,7 +143,7 @@ fn main() -> ExitCode {
     };
 
     let quiet = cli.quiet;
-    let exit_code = runtime.block_on(async_main(cli));
+    let exit_code = runtime.block_on(async_main(cli, profile, serial_cfg));
 
     // Restore termios BEFORE the goodbye banner so eprintln's `\n`
     // is translated to `\r\n` again by ONLCR. Without this, raw mode
@@ -118,8 +164,8 @@ fn main() -> ExitCode {
     ExitCode::from(exit_code as u8)
 }
 
-async fn async_main(cli: Cli) -> i32 {
-    let mut device = match SerialPortDevice::open(&cli.device, cli.to_serial_config()) {
+async fn async_main(cli: Cli, profile: Profile, serial_cfg: rtcom_core::SerialConfig) -> i32 {
+    let mut device = match SerialPortDevice::open(&cli.device, serial_cfg) {
         Ok(d) => d,
         Err(err) => {
             eprintln!("rtcom: open {} failed: {err}", cli.device);
@@ -141,11 +187,9 @@ async fn async_main(cli: Cli) -> i32 {
     let initial_dtr = !cli.lower_dtr;
     let initial_rts = !cli.lower_rts;
 
-    // `omap` / `imap` on Cli are Options now; unspecified → `None` variant
-    // (no transformation), matching the pre-profile CLI default.
     let session = Session::new(device)
-        .with_omap(LineEndingMapper::new(cli.omap.unwrap_or_default().into()))
-        .with_imap(LineEndingMapper::new(cli.imap.unwrap_or_default().into()))
+        .with_omap(LineEndingMapper::new(cli.resolved_omap(&profile)))
+        .with_imap(LineEndingMapper::new(cli.resolved_imap(&profile)))
         .with_initial_dtr(initial_dtr)
         .with_initial_rts(initial_rts);
 
@@ -247,8 +291,7 @@ fn apply_initial_lines(device: &mut SerialPortDevice, cli: &Cli) -> Result<(), r
     Ok(())
 }
 
-fn print_config_summary(cli: &Cli) {
-    let cfg = cli.to_serial_config();
+fn print_config_summary(cli: &Cli, cfg: &rtcom_core::SerialConfig) {
     eprintln!(
         "rtcom — device: {} | {} {}{}{} | flow: {:?} | no-reset: {} | echo: {} | escape: 0x{:02x} | verbose: {}",
         cli.device,
@@ -262,6 +305,66 @@ fn print_config_summary(cli: &Cli) {
         cli.escape,
         cli.verbose,
     );
+}
+
+/// Reads the profile at `path`, or returns the built-in default.
+///
+/// Missing file → silently use defaults (typical fresh install).
+/// Malformed TOML or I/O error → warn to stderr (unless quiet) and
+/// still continue with defaults. Profile load must never be the
+/// reason rtcom refuses to start.
+fn load_profile(path: Option<&Path>, quiet: bool) -> Profile {
+    let Some(path) = path else {
+        return Profile::default();
+    };
+    if !path.exists() {
+        return Profile::default();
+    }
+    match rtcom_config::read(path) {
+        Ok(p) => p,
+        Err(err) => {
+            if !quiet {
+                eprintln!(
+                    "rtcom: profile at {} unreadable ({err}); using defaults",
+                    path.display()
+                );
+            }
+            Profile::default()
+        }
+    }
+}
+
+/// Projects a runtime [`rtcom_core::SerialConfig`] back into the TOML-facing
+/// [`rtcom_config::profile::SerialSection`] used for `--save`. The
+/// inverse of the CLI's merge step: runtime enums → stable strings.
+fn serial_config_to_section(
+    cfg: &rtcom_core::SerialConfig,
+) -> rtcom_config::profile::SerialSection {
+    rtcom_config::profile::SerialSection {
+        baud: cfg.baud_rate,
+        data_bits: cfg.data_bits.bits(),
+        stop_bits: stop_bits_number(cfg.stop_bits),
+        parity: parity_word(cfg.parity).into(),
+        flow: flow_word(cfg.flow_control).into(),
+    }
+}
+
+const fn parity_word(p: rtcom_core::Parity) -> &'static str {
+    match p {
+        rtcom_core::Parity::None => "none",
+        rtcom_core::Parity::Even => "even",
+        rtcom_core::Parity::Odd => "odd",
+        rtcom_core::Parity::Mark => "mark",
+        rtcom_core::Parity::Space => "space",
+    }
+}
+
+const fn flow_word(f: rtcom_core::FlowControl) -> &'static str {
+    match f {
+        rtcom_core::FlowControl::None => "none",
+        rtcom_core::FlowControl::Hardware => "hw",
+        rtcom_core::FlowControl::Software => "sw",
+    }
 }
 
 /// Pretty-prints an escape byte in the same caret notation `--escape`

@@ -699,6 +699,7 @@ dependencies = [
  "bytes",
  "clap",
  "crossterm",
+ "rtcom-config",
  "rtcom-core",
  "tokio",
  "tokio-util",
