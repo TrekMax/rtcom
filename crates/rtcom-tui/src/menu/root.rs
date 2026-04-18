@@ -4,19 +4,26 @@
 //! child dialogs (placeholders until T12+). Esc or the "Exit menu"
 //! item closes the menu.
 
-use crossterm::event::KeyEvent;
-use ratatui::{buffer::Buffer, layout::Rect};
+use crossterm::event::{KeyCode, KeyEvent};
+use ratatui::{
+    buffer::Buffer,
+    layout::Rect,
+    style::{Modifier, Style},
+    text::{Line, Span},
+    widgets::{Block, Paragraph, Widget},
+};
 
-#[allow(
-    unused_imports,
-    reason = "PlaceholderDialog is consumed by the T11 GREEN impl"
-)]
 use crate::{
     menu::placeholder::PlaceholderDialog,
     modal::{Dialog, DialogOutcome},
 };
 
 /// Top-level configuration menu (the first real [`Dialog`] impl).
+///
+/// Owns a fixed list of seven entries, an integer cursor, and a
+/// rendering style. Emits [`DialogOutcome::Push`] for every non-exit
+/// selection (wrapping a [`PlaceholderDialog`] in T11) and
+/// [`DialogOutcome::Close`] for Esc / "Exit menu".
 pub struct RootMenu {
     items: &'static [&'static str],
     selected: usize,
@@ -26,13 +33,19 @@ const ITEMS: &[&str] = &[
     "Serial port setup", // 0
     "Line endings",      // 1
     "Modem control",     // 2
-    // separator after index 2
+    // visual separator between config and profile groups
     "Write profile", // 3
     "Read profile",  // 4
-    // separator after index 4
+    // visual separator between profile and screen groups
     "Screen options", // 5
     "Exit menu",      // 6
 ];
+
+/// Index of the "Exit menu" sentinel; selecting it closes the menu.
+const EXIT_INDEX: usize = 6;
+
+/// Indices after which a visual separator row is drawn.
+const SEPARATORS_AFTER: &[usize] = &[2, 4];
 
 impl Default for RootMenu {
     fn default() -> Self {
@@ -61,6 +74,38 @@ impl RootMenu {
     pub const fn items(&self) -> &'static [&'static str] {
         self.items
     }
+
+    /// Move the cursor up one row, wrapping to the last item when
+    /// called on the first.
+    fn move_up(&mut self) {
+        if self.selected == 0 {
+            self.selected = self.items.len() - 1;
+        } else {
+            self.selected -= 1;
+        }
+    }
+
+    /// Move the cursor down one row, wrapping to the first item when
+    /// called on the last.
+    fn move_down(&mut self) {
+        if self.selected + 1 >= self.items.len() {
+            self.selected = 0;
+        } else {
+            self.selected += 1;
+        }
+    }
+
+    /// Handle the Enter key. Exit item closes; everything else pushes
+    /// a placeholder child dialog (T12+ replaces placeholders with
+    /// real dialogs).
+    fn activate(&self) -> DialogOutcome {
+        if self.selected == EXIT_INDEX {
+            DialogOutcome::Close
+        } else {
+            let title = self.items[self.selected];
+            DialogOutcome::Push(Box::new(PlaceholderDialog::new(title)))
+        }
+    }
 }
 
 impl Dialog for RootMenu {
@@ -72,13 +117,51 @@ impl Dialog for RootMenu {
         "Configuration"
     }
 
-    fn render(&self, _area: Rect, _buf: &mut Buffer) {
-        // stub: T11 impl phase will render
+    fn render(&self, area: Rect, buf: &mut Buffer) {
+        let block = Block::bordered().title("Configuration");
+        let inner = block.inner(area);
+        block.render(area, buf);
+
+        // Build one visual row per item, interleaving separators.
+        let mut lines: Vec<Line<'_>> =
+            Vec::with_capacity(self.items.len() + SEPARATORS_AFTER.len());
+        for (idx, item) in self.items.iter().enumerate() {
+            let style = if idx == self.selected {
+                Style::default().add_modifier(Modifier::REVERSED)
+            } else {
+                Style::default()
+            };
+            let prefix = if idx == self.selected { "> " } else { "  " };
+            lines.push(Line::from(vec![Span::styled(
+                format!("{prefix}{item}"),
+                style,
+            )]));
+            if SEPARATORS_AFTER.contains(&idx) {
+                let width = usize::from(inner.width);
+                lines.push(Line::from(Span::styled(
+                    "-".repeat(width),
+                    Style::default().add_modifier(Modifier::DIM),
+                )));
+            }
+        }
+
+        Paragraph::new(lines).render(inner, buf);
     }
 
-    fn handle_key(&mut self, _key: KeyEvent) -> DialogOutcome {
-        // stub: tests must fail
-        DialogOutcome::Consumed
+    fn handle_key(&mut self, key: KeyEvent) -> DialogOutcome {
+        match key.code {
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.move_up();
+                DialogOutcome::Consumed
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                self.move_down();
+                DialogOutcome::Consumed
+            }
+            KeyCode::Esc => DialogOutcome::Close,
+            KeyCode::Enter => self.activate(),
+            _ => DialogOutcome::Consumed,
+        }
     }
 }
 
@@ -157,5 +240,13 @@ mod tests {
         let mut m = RootMenu::new();
         let out = m.handle_key(key(KeyCode::Esc));
         assert!(matches!(out, DialogOutcome::Close));
+    }
+
+    #[test]
+    fn unknown_key_is_consumed_no_movement() {
+        let mut m = RootMenu::new();
+        let out = m.handle_key(key(KeyCode::Char('x')));
+        assert!(matches!(out, DialogOutcome::Consumed));
+        assert_eq!(m.selected(), 0);
     }
 }

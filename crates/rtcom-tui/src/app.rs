@@ -2,6 +2,7 @@
 
 use crossterm::event::KeyEvent;
 use ratatui::{
+    layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::Paragraph,
@@ -13,7 +14,13 @@ use rtcom_core::{
 };
 use tui_term::widget::PseudoTerminal;
 
-use crate::{input::Dispatch, layout::main_chrome, serial_pane::SerialPane};
+use crate::{
+    input::Dispatch,
+    layout::main_chrome,
+    menu::RootMenu,
+    modal::{DialogOutcome, ModalStack},
+    serial_pane::SerialPane,
+};
 
 /// Owns the TUI render state and input dispatcher.
 ///
@@ -29,6 +36,7 @@ pub struct TuiApp {
     device_path: String,
     config_summary: String,
     parser: CommandKeyParser,
+    modal_stack: ModalStack,
 }
 
 impl TuiApp {
@@ -46,6 +54,7 @@ impl TuiApp {
             device_path: String::new(),
             config_summary: String::new(),
             parser: CommandKeyParser::default(),
+            modal_stack: ModalStack::new(),
         }
     }
 
@@ -90,21 +99,34 @@ impl TuiApp {
     ///
     /// - [`ParseOutput::Data`] bytes accumulate into a
     ///   [`Dispatch::TxBytes`] payload.
-    /// - [`Command::OpenMenu`] flips `menu_open` and publishes
-    ///   [`Event::MenuOpened`] on the bus, then returns
-    ///   [`Dispatch::OpenedMenu`].
+    /// - [`Command::OpenMenu`] flips `menu_open`, pushes a
+    ///   [`RootMenu`] onto the modal stack, publishes
+    ///   [`Event::MenuOpened`], and returns [`Dispatch::OpenedMenu`].
     /// - [`Command::Quit`] returns [`Dispatch::Quit`].
     /// - Any other [`Command`] is published on the bus as
     ///   [`Event::Command`]; the dispatcher returns [`Dispatch::Noop`]
     ///   (T17 refactors this into direct `Session` handles).
     ///
-    /// When the menu is open, T9 currently swallows the input and
-    /// returns [`Dispatch::Noop`]. T10+ will forward the event to the
-    /// `ModalStack`.
+    /// When the menu is open, the event is handed to the topmost
+    /// [`crate::modal::Dialog`] on the [`ModalStack`]. The stack
+    /// auto-manages `Close` / `Push` outcomes; this function only
+    /// needs to detect the root dialog closing (stack becomes empty)
+    /// to publish [`Event::MenuClosed`] and flip `menu_open` back.
+    /// `Action` outcomes bubble up as [`Dispatch::Action`] for the
+    /// runner to apply.
     pub fn handle_key(&mut self, key: KeyEvent) -> Dispatch {
         if self.menu_open {
-            // T10+ will forward this to modal_stack.handle_key(...).
-            return Dispatch::Noop;
+            let outcome = self.modal_stack.handle_key(key);
+            if self.modal_stack.is_empty() {
+                // Root dialog closed; menu is fully dismissed.
+                self.menu_open = false;
+                let _ = self.bus.publish(Event::MenuClosed);
+                return Dispatch::ClosedMenu;
+            }
+            return match outcome {
+                DialogOutcome::Action(action) => Dispatch::Action(action),
+                _ => Dispatch::Noop,
+            };
         }
 
         let bytes = crate::input::key_to_bytes(key);
@@ -119,6 +141,7 @@ impl TuiApp {
                 ParseOutput::Data(data_byte) => tx.push(data_byte),
                 ParseOutput::Command(Command::OpenMenu) => {
                     self.menu_open = true;
+                    self.modal_stack.push(Box::new(RootMenu::new()));
                     let _ = self.bus.publish(Event::MenuOpened);
                     return Dispatch::OpenedMenu;
                 }
@@ -179,6 +202,29 @@ impl TuiApp {
             Style::default().add_modifier(Modifier::DIM),
         ));
         f.render_widget(Paragraph::new(bottom_line), bottom);
+
+        // Modal overlay: topmost dialog drawn in a centred rect.
+        if self.menu_open {
+            if let Some(top) = self.modal_stack.top() {
+                let dialog_area = centred_rect(area, 30, 12);
+                top.render(dialog_area, f.buffer_mut());
+            }
+        }
+    }
+}
+
+/// Centre a `width x height` rectangle inside `outer`, clipping if
+/// the outer is smaller than the requested size.
+fn centred_rect(outer: Rect, width: u16, height: u16) -> Rect {
+    let clamped_w = width.min(outer.width);
+    let clamped_h = height.min(outer.height);
+    let x = outer.x + (outer.width.saturating_sub(clamped_w)) / 2;
+    let y = outer.y + (outer.height.saturating_sub(clamped_h)) / 2;
+    Rect {
+        x,
+        y,
+        width: clamped_w,
+        height: clamped_h,
     }
 }
 
