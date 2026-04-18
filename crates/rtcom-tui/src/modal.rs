@@ -66,9 +66,11 @@ pub trait Dialog {
 
     /// Preferred size of the dialog when rendered inside `outer`.
     ///
-    /// Default impl returns a `30x12` rectangle centred inside `outer`
-    /// — enough for a typical seven-item menu. Dialogs with more
-    /// fields override this to return a wider rect.
+    /// The default implementation returns a `30x12` rectangle centred
+    /// inside `outer` — enough for a typical seven-item menu. Dialogs
+    /// with more fields (e.g. the serial-port setup dialog) override
+    /// this to return a wider rect. The [`crate::app::TuiApp`] render
+    /// loop consults this method to position the modal overlay.
     fn preferred_size(&self, outer: Rect) -> Rect {
         centred_rect(outer, 30, 12)
     }
@@ -76,6 +78,9 @@ pub trait Dialog {
 
 /// Centre a `width x height` rectangle inside `outer`, clipping if
 /// the outer is smaller than the requested size.
+///
+/// Shared helper used by [`Dialog::preferred_size`] default impl and
+/// by individual dialog implementations that override it.
 #[must_use]
 pub fn centred_rect(outer: Rect, width: u16, height: u16) -> Rect {
     let clamped_w = width.min(outer.width);

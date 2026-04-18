@@ -16,6 +16,6 @@ pub mod terminal;
 
 pub use app::TuiApp;
 pub use input::Dispatch;
-pub use menu::{PlaceholderDialog, RootMenu};
+pub use menu::{PlaceholderDialog, RootMenu, SerialPortSetupDialog};
 pub use modal::{Dialog, DialogAction, DialogOutcome, ModalStack};
 pub use serial_pane::SerialPane;

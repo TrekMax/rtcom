@@ -1,45 +1,260 @@
 //! Serial-port setup dialog — the first real configuration sub-dialog.
 //!
-//! T12 red stage: scaffold only. Methods return defaults; the tests
-//! below encode the target behaviour and intentionally fail.
+//! Lets the user edit the five link parameters of a [`SerialConfig`]
+//! (baud / data bits / stop bits / parity / flow control) and either
+//! apply them to the live session (`F2`), apply + persist to profile
+//! (`F10`), or cancel. Pushed by [`crate::menu::RootMenu`] when the
+//! user selects "Serial port setup".
+//!
+//! T12 focuses on the state machine + outcomes; the visual polish
+//! (inline edit cursor, per-field validation toasts) arrives in T22.
 
-use crossterm::event::KeyEvent;
-use ratatui::{buffer::Buffer, layout::Rect};
+use crossterm::event::{KeyCode, KeyEvent};
+use ratatui::{
+    buffer::Buffer,
+    layout::Rect,
+    style::{Modifier, Style},
+    text::{Line, Span},
+    widgets::{Block, Paragraph, Widget},
+};
 
-use rtcom_core::SerialConfig;
+use rtcom_core::{DataBits, FlowControl, Parity, SerialConfig, StopBits};
 
-use crate::modal::{Dialog, DialogOutcome};
+use crate::modal::{centred_rect, Dialog, DialogAction, DialogOutcome};
 
-/// Serial port setup dialog (stub).
+/// Index of the first field row (baud rate).
+const FIELD_BAUD: usize = 0;
+/// Index of the data-bits field row.
+const FIELD_DATA_BITS: usize = 1;
+/// Index of the stop-bits field row.
+const FIELD_STOP_BITS: usize = 2;
+/// Index of the parity field row.
+const FIELD_PARITY: usize = 3;
+/// Index of the flow-control field row.
+const FIELD_FLOW: usize = 4;
+
+/// Index of the `[Apply live]` action button.
+const ACTION_APPLY_LIVE: usize = 5;
+/// Index of the `[Apply + Save]` action button.
+const ACTION_APPLY_SAVE: usize = 6;
+/// Index of the `[Cancel]` action button.
+const ACTION_CANCEL: usize = 7;
+
+/// Total cursor slots (5 fields + 3 actions).
+const CURSOR_MAX: usize = 8;
+
+/// Edit mode for the dialog.
+///
+/// When [`EditState::Idle`] the dialog is navigating fields. When
+/// [`EditState::EditingNumeric`] the user is typing digits into a
+/// numeric field; `Enter` commits, `Esc` cancels.
+#[derive(Debug, Clone)]
+enum EditState {
+    /// Not editing — arrow / vim keys move the field cursor.
+    Idle,
+    /// Typing digits into the numeric field identified by the dialog's
+    /// current `cursor` position. The buffer holds the raw keystrokes;
+    /// parsing happens on commit.
+    EditingNumeric(String),
+}
+
+/// Serial port setup dialog.
+///
+/// Holds a snapshot of the initial [`SerialConfig`] and a mutable
+/// `pending` copy that tracks the user's edits. Emits
+/// [`DialogAction::ApplyLive`] on `F2` / `Enter` on `[Apply live]`,
+/// [`DialogAction::ApplyAndSave`] on `F10` / `Enter` on
+/// `[Apply + Save]`, and [`DialogOutcome::Close`] on `Esc` / `Enter`
+/// on `[Cancel]`.
+///
+/// After emitting an `Action`, the dialog stays open — T17 wires the
+/// outer `TuiApp` to pop the stack once the action has been applied.
 pub struct SerialPortSetupDialog {
+    #[allow(dead_code, reason = "reserved for T17 revert-on-cancel path")]
+    initial: SerialConfig,
     pending: SerialConfig,
+    cursor: usize,
+    edit_state: EditState,
 }
 
 impl SerialPortSetupDialog {
-    /// Construct a dialog seeded with `initial_config`.
+    /// Construct a dialog seeded with `initial_config`. The cursor
+    /// starts on the baud-rate row in field-navigation (idle) mode.
     #[must_use]
     pub const fn new(initial_config: SerialConfig) -> Self {
         Self {
+            initial: initial_config,
             pending: initial_config,
+            cursor: FIELD_BAUD,
+            edit_state: EditState::Idle,
         }
     }
 
-    /// Current cursor position (stub always returns 0).
+    /// Current cursor position. Valid range is `0..8`: indices `0..=4`
+    /// select a field (baud / data bits / stop bits / parity / flow
+    /// control), and `5..=7` select one of the action buttons
+    /// (Apply live / Apply + Save / Cancel).
     #[must_use]
     pub const fn cursor(&self) -> usize {
-        0
+        self.cursor
     }
 
-    /// True while editing a numeric field (stub always false).
+    /// True while the user is typing into a numeric field.
     #[must_use]
     pub const fn is_editing(&self) -> bool {
-        false
+        matches!(self.edit_state, EditState::EditingNumeric(_))
     }
 
-    /// The currently pending [`SerialConfig`].
+    /// The currently pending [`SerialConfig`]; reflects every committed
+    /// edit since construction.
     #[must_use]
     pub const fn pending(&self) -> &SerialConfig {
         &self.pending
+    }
+
+    /// Move the cursor up one row (wraps).
+    fn move_up(&mut self) {
+        self.cursor = if self.cursor == 0 {
+            CURSOR_MAX - 1
+        } else {
+            self.cursor - 1
+        };
+    }
+
+    /// Move the cursor down one row (wraps).
+    fn move_down(&mut self) {
+        self.cursor = (self.cursor + 1) % CURSOR_MAX;
+    }
+
+    /// Handle `Enter` while in field-navigation mode.
+    fn activate(&mut self) -> DialogOutcome {
+        match self.cursor {
+            FIELD_BAUD | FIELD_DATA_BITS | FIELD_STOP_BITS => {
+                self.edit_state = EditState::EditingNumeric(String::new());
+                DialogOutcome::Consumed
+            }
+            FIELD_PARITY => {
+                self.pending.parity = next_parity(self.pending.parity);
+                DialogOutcome::Consumed
+            }
+            FIELD_FLOW => {
+                self.pending.flow_control = next_flow(self.pending.flow_control);
+                DialogOutcome::Consumed
+            }
+            ACTION_APPLY_LIVE => DialogOutcome::Action(DialogAction::ApplyLive(self.pending)),
+            ACTION_APPLY_SAVE => DialogOutcome::Action(DialogAction::ApplyAndSave(self.pending)),
+            ACTION_CANCEL => DialogOutcome::Close,
+            _ => DialogOutcome::Consumed,
+        }
+    }
+
+    /// Attempt to commit the in-progress numeric edit into `pending`.
+    /// On parse failure the pending value is left unchanged.
+    fn commit_numeric_edit(&mut self) {
+        let EditState::EditingNumeric(ref buf) = self.edit_state else {
+            return;
+        };
+        let buf = buf.clone();
+        self.edit_state = EditState::Idle;
+        if buf.is_empty() {
+            return;
+        }
+        match self.cursor {
+            FIELD_BAUD => {
+                if let Ok(n) = buf.parse::<u32>() {
+                    if n > 0 {
+                        self.pending.baud_rate = n;
+                    }
+                }
+            }
+            FIELD_DATA_BITS => {
+                if let Ok(n) = buf.parse::<u8>() {
+                    if let Some(bits) = data_bits_from_u8(n) {
+                        self.pending.data_bits = bits;
+                    }
+                }
+            }
+            FIELD_STOP_BITS => {
+                if let Ok(n) = buf.parse::<u8>() {
+                    if let Some(bits) = stop_bits_from_u8(n) {
+                        self.pending.stop_bits = bits;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Handle a key while in [`EditState::EditingNumeric`].
+    fn handle_key_editing(&mut self, key: KeyEvent) -> DialogOutcome {
+        match key.code {
+            KeyCode::Char(c) if c.is_ascii_digit() => {
+                if let EditState::EditingNumeric(ref mut buf) = self.edit_state {
+                    buf.push(c);
+                }
+                DialogOutcome::Consumed
+            }
+            KeyCode::Backspace => {
+                if let EditState::EditingNumeric(ref mut buf) = self.edit_state {
+                    buf.pop();
+                }
+                DialogOutcome::Consumed
+            }
+            KeyCode::Enter => {
+                self.commit_numeric_edit();
+                DialogOutcome::Consumed
+            }
+            KeyCode::Esc => {
+                // Discard the buffered keystrokes; pending stays untouched.
+                self.edit_state = EditState::Idle;
+                DialogOutcome::Consumed
+            }
+            _ => DialogOutcome::Consumed,
+        }
+    }
+
+    /// Build the rendered field row text for `cursor == field_idx`.
+    fn field_line(&self, field_idx: usize, label: &'static str, value: String) -> Line<'_> {
+        let selected = self.cursor == field_idx;
+        let prefix = if selected { "> " } else { "  " };
+        let value_display = if selected && self.is_editing() {
+            if let EditState::EditingNumeric(ref buf) = self.edit_state {
+                format!("[{buf}_]")
+            } else {
+                value
+            }
+        } else {
+            value
+        };
+        let text = format!("{prefix}{label:<12} {value_display}");
+        if selected {
+            Line::from(Span::styled(
+                text,
+                Style::default().add_modifier(Modifier::REVERSED),
+            ))
+        } else {
+            Line::from(Span::raw(text))
+        }
+    }
+
+    /// Build the rendered action-button row for `cursor == action_idx`.
+    fn action_line(
+        &self,
+        action_idx: usize,
+        label: &'static str,
+        shortcut: &'static str,
+    ) -> Line<'_> {
+        let selected = self.cursor == action_idx;
+        let prefix = if selected { "> " } else { "  " };
+        let text = format!("{prefix}{label:<18} {shortcut}");
+        if selected {
+            Line::from(Span::styled(
+                text,
+                Style::default().add_modifier(Modifier::REVERSED),
+            ))
+        } else {
+            Line::from(Span::raw(text))
+        }
     }
 }
 
@@ -52,10 +267,164 @@ impl Dialog for SerialPortSetupDialog {
         "Serial port setup"
     }
 
-    fn render(&self, _area: Rect, _buf: &mut Buffer) {}
+    fn preferred_size(&self, outer: Rect) -> Rect {
+        centred_rect(outer, 44, 18)
+    }
 
-    fn handle_key(&mut self, _key: KeyEvent) -> DialogOutcome {
-        DialogOutcome::Consumed
+    fn render(&self, area: Rect, buf: &mut Buffer) {
+        let block = Block::bordered().title("Serial port setup");
+        let inner = block.inner(area);
+        block.render(area, buf);
+
+        let cfg = &self.pending;
+        let sep_width = usize::from(inner.width);
+        let sep_line = Line::from(Span::styled(
+            "-".repeat(sep_width),
+            Style::default().add_modifier(Modifier::DIM),
+        ));
+
+        let lines = vec![
+            Line::from(Span::raw("")),
+            self.field_line(FIELD_BAUD, "Baud rate", cfg.baud_rate.to_string()),
+            self.field_line(
+                FIELD_DATA_BITS,
+                "Data bits",
+                cfg.data_bits.bits().to_string(),
+            ),
+            self.field_line(
+                FIELD_STOP_BITS,
+                "Stop bits",
+                stop_bits_label(cfg.stop_bits).to_string(),
+            ),
+            self.field_line(FIELD_PARITY, "Parity", parity_label(cfg.parity).to_string()),
+            self.field_line(
+                FIELD_FLOW,
+                "Flow ctrl",
+                flow_label(cfg.flow_control).to_string(),
+            ),
+            Line::from(Span::raw("")),
+            sep_line,
+            Line::from(Span::raw("")),
+            self.action_line(ACTION_APPLY_LIVE, "[Apply live]", "(F2)"),
+            self.action_line(ACTION_APPLY_SAVE, "[Apply + Save]", "(F10)"),
+            self.action_line(ACTION_CANCEL, "[Cancel]", "(Esc)"),
+        ];
+
+        Paragraph::new(lines).render(inner, buf);
+    }
+
+    fn handle_key(&mut self, key: KeyEvent) -> DialogOutcome {
+        // F2 / F10 fire from anywhere, including edit mode — treat them
+        // as explicit "commit and apply" shortcuts.
+        match key.code {
+            KeyCode::F(2) => {
+                self.commit_numeric_edit();
+                return DialogOutcome::Action(DialogAction::ApplyLive(self.pending));
+            }
+            KeyCode::F(10) => {
+                self.commit_numeric_edit();
+                return DialogOutcome::Action(DialogAction::ApplyAndSave(self.pending));
+            }
+            _ => {}
+        }
+
+        if self.is_editing() {
+            return self.handle_key_editing(key);
+        }
+
+        match key.code {
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.move_up();
+                DialogOutcome::Consumed
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                self.move_down();
+                DialogOutcome::Consumed
+            }
+            KeyCode::Esc => DialogOutcome::Close,
+            KeyCode::Enter => self.activate(),
+            // Space cycles enum fields; on numeric fields it's a no-op.
+            KeyCode::Char(' ') => match self.cursor {
+                FIELD_PARITY => {
+                    self.pending.parity = next_parity(self.pending.parity);
+                    DialogOutcome::Consumed
+                }
+                FIELD_FLOW => {
+                    self.pending.flow_control = next_flow(self.pending.flow_control);
+                    DialogOutcome::Consumed
+                }
+                _ => DialogOutcome::Consumed,
+            },
+            _ => DialogOutcome::Consumed,
+        }
+    }
+}
+
+/// Next parity value in the canonical cycle order (wraps).
+const fn next_parity(p: Parity) -> Parity {
+    match p {
+        Parity::None => Parity::Even,
+        Parity::Even => Parity::Odd,
+        Parity::Odd => Parity::Mark,
+        Parity::Mark => Parity::Space,
+        Parity::Space => Parity::None,
+    }
+}
+
+/// Next flow-control value (wraps).
+const fn next_flow(f: FlowControl) -> FlowControl {
+    match f {
+        FlowControl::None => FlowControl::Hardware,
+        FlowControl::Hardware => FlowControl::Software,
+        FlowControl::Software => FlowControl::None,
+    }
+}
+
+/// Human-readable label for a [`Parity`].
+const fn parity_label(p: Parity) -> &'static str {
+    match p {
+        Parity::None => "none",
+        Parity::Even => "even",
+        Parity::Odd => "odd",
+        Parity::Mark => "mark",
+        Parity::Space => "space",
+    }
+}
+
+/// Human-readable label for a [`FlowControl`].
+const fn flow_label(f: FlowControl) -> &'static str {
+    match f {
+        FlowControl::None => "none",
+        FlowControl::Hardware => "hw",
+        FlowControl::Software => "sw",
+    }
+}
+
+/// Human-readable label for a [`StopBits`].
+const fn stop_bits_label(s: StopBits) -> &'static str {
+    match s {
+        StopBits::One => "1",
+        StopBits::Two => "2",
+    }
+}
+
+/// Convert `5|6|7|8` into the matching [`DataBits`] variant.
+const fn data_bits_from_u8(n: u8) -> Option<DataBits> {
+    match n {
+        5 => Some(DataBits::Five),
+        6 => Some(DataBits::Six),
+        7 => Some(DataBits::Seven),
+        8 => Some(DataBits::Eight),
+        _ => None,
+    }
+}
+
+/// Convert `1|2` into the matching [`StopBits`] variant.
+const fn stop_bits_from_u8(n: u8) -> Option<StopBits> {
+    match n {
+        1 => Some(StopBits::One),
+        2 => Some(StopBits::Two),
+        _ => None,
     }
 }
 
@@ -64,8 +433,6 @@ mod tests {
     use super::*;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use rtcom_core::SerialConfig;
-
-    use crate::modal::DialogAction;
 
     const fn key(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::NONE)
@@ -213,13 +580,13 @@ mod tests {
     fn up_wraps_to_last_action() {
         let mut d = default_dialog();
         d.handle_key(key(KeyCode::Up));
-        assert_eq!(d.cursor(), 7);
+        assert_eq!(d.cursor(), CURSOR_MAX - 1);
     }
 
     #[test]
     fn down_wraps_from_last_to_first() {
         let mut d = default_dialog();
-        for _ in 0..8 {
+        for _ in 0..CURSOR_MAX {
             d.handle_key(key(KeyCode::Down));
         }
         assert_eq!(d.cursor(), 0);

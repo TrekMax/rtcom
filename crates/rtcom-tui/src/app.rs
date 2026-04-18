@@ -2,7 +2,6 @@
 
 use crossterm::event::KeyEvent;
 use ratatui::{
-    layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::Paragraph,
@@ -10,7 +9,7 @@ use ratatui::{
 };
 use rtcom_core::{
     command::{Command, CommandKeyParser, ParseOutput},
-    Event, EventBus,
+    Event, EventBus, SerialConfig,
 };
 use tui_term::widget::PseudoTerminal;
 
@@ -37,13 +36,22 @@ pub struct TuiApp {
     config_summary: String,
     parser: CommandKeyParser,
     modal_stack: ModalStack,
+    /// Current serial-link configuration; seeded to
+    /// [`SerialConfig::default`] at construction and updated by
+    /// [`TuiApp::set_serial_config`]. Forwarded into new [`RootMenu`]
+    /// instances so sub-dialogs (starting with T12's
+    /// [`crate::menu::SerialPortSetupDialog`]) can display live values.
+    current_config: SerialConfig,
 }
 
 impl TuiApp {
     /// Construct a new `TuiApp` bound to the given event bus.
     ///
-    /// Starts with a `24x80` serial pane; the pane is resized to the
-    /// terminal body on every call to [`TuiApp::render`].
+    /// Starts with a `24x80` serial pane and a default [`SerialConfig`];
+    /// the pane is resized to the terminal body on every call to
+    /// [`TuiApp::render`], and the config is overwritten by
+    /// [`TuiApp::set_serial_config`] once the runner knows the real
+    /// link parameters.
     #[must_use]
     pub fn new(bus: EventBus) -> Self {
         Self {
@@ -55,7 +63,17 @@ impl TuiApp {
             config_summary: String::new(),
             parser: CommandKeyParser::default(),
             modal_stack: ModalStack::new(),
+            current_config: SerialConfig::default(),
         }
+    }
+
+    /// Update the cached [`SerialConfig`] that new [`RootMenu`] pushes
+    /// pass down to sub-dialogs.
+    ///
+    /// Call this whenever the live session's config changes (T17 wires
+    /// this into `Event::ConfigChanged`).
+    pub const fn set_serial_config(&mut self, cfg: SerialConfig) {
+        self.current_config = cfg;
     }
 
     /// Whether the configuration menu is currently open.
@@ -141,7 +159,8 @@ impl TuiApp {
                 ParseOutput::Data(data_byte) => tx.push(data_byte),
                 ParseOutput::Command(Command::OpenMenu) => {
                     self.menu_open = true;
-                    self.modal_stack.push(Box::new(RootMenu::new()));
+                    self.modal_stack
+                        .push(Box::new(RootMenu::new(self.current_config)));
                     let _ = self.bus.publish(Event::MenuOpened);
                     return Dispatch::OpenedMenu;
                 }
@@ -203,28 +222,13 @@ impl TuiApp {
         ));
         f.render_widget(Paragraph::new(bottom_line), bottom);
 
-        // Modal overlay: topmost dialog drawn in a centred rect.
+        // Modal overlay: topmost dialog drawn at its preferred size.
         if self.menu_open {
             if let Some(top) = self.modal_stack.top() {
-                let dialog_area = centred_rect(area, 30, 12);
+                let dialog_area = top.preferred_size(area);
                 top.render(dialog_area, f.buffer_mut());
             }
         }
-    }
-}
-
-/// Centre a `width x height` rectangle inside `outer`, clipping if
-/// the outer is smaller than the requested size.
-fn centred_rect(outer: Rect, width: u16, height: u16) -> Rect {
-    let clamped_w = width.min(outer.width);
-    let clamped_h = height.min(outer.height);
-    let x = outer.x + (outer.width.saturating_sub(clamped_w)) / 2;
-    let y = outer.y + (outer.height.saturating_sub(clamped_h)) / 2;
-    Rect {
-        x,
-        y,
-        width: clamped_w,
-        height: clamped_h,
     }
 }
 
@@ -341,6 +345,20 @@ mod tests {
         app.set_device_summary("/dev/ttyUSB0", "115200 8N1 none");
         let _ = app.handle_key(key(KeyCode::Char('a'), KeyModifiers::CONTROL));
         let _ = app.handle_key(key(KeyCode::Char('m'), KeyModifiers::NONE));
+        assert!(app.is_menu_open());
+        let terminal = render_app(&mut app, 80, 24);
+        insta::assert_snapshot!(terminal.backend());
+    }
+
+    #[test]
+    fn main_screen_80x24_serial_port_setup_open_snapshot() {
+        let bus = EventBus::new(64);
+        let mut app = TuiApp::new(bus);
+        app.set_device_summary("/dev/ttyUSB0", "115200 8N1 none");
+        // Open menu (^A m), then Enter on "Serial port setup" (idx 0).
+        let _ = app.handle_key(key(KeyCode::Char('a'), KeyModifiers::CONTROL));
+        let _ = app.handle_key(key(KeyCode::Char('m'), KeyModifiers::NONE));
+        let _ = app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
         assert!(app.is_menu_open());
         let terminal = render_app(&mut app, 80, 24);
         insta::assert_snapshot!(terminal.backend());

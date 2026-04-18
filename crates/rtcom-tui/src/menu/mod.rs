@@ -13,3 +13,4 @@ pub mod serial_port;
 
 pub use placeholder::PlaceholderDialog;
 pub use root::RootMenu;
+pub use serial_port::SerialPortSetupDialog;

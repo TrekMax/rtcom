@@ -12,21 +12,29 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Paragraph, Widget},
 };
+use rtcom_core::SerialConfig;
 
 use crate::{
-    menu::placeholder::PlaceholderDialog,
+    menu::{placeholder::PlaceholderDialog, serial_port::SerialPortSetupDialog},
     modal::{Dialog, DialogOutcome},
 };
 
+/// Index of the "Serial port setup" item; selecting it drills into
+/// the real [`SerialPortSetupDialog`] (T12).
+const SERIAL_PORT_SETUP_INDEX: usize = 0;
+
 /// Top-level configuration menu (the first real [`Dialog`] impl).
 ///
-/// Owns a fixed list of seven entries, an integer cursor, and a
+/// Owns a fixed list of seven entries, an integer cursor, a snapshot
+/// of the current [`SerialConfig`] (passed on to sub-dialogs), and a
 /// rendering style. Emits [`DialogOutcome::Push`] for every non-exit
-/// selection (wrapping a [`PlaceholderDialog`] in T11) and
-/// [`DialogOutcome::Close`] for Esc / "Exit menu".
+/// selection and [`DialogOutcome::Close`] for Esc / "Exit menu".
 pub struct RootMenu {
     items: &'static [&'static str],
     selected: usize,
+    /// Snapshot of the live [`SerialConfig`]; forwarded to
+    /// [`SerialPortSetupDialog::new`] when the user drills in.
+    initial_config: SerialConfig,
 }
 
 const ITEMS: &[&str] = &[
@@ -47,19 +55,16 @@ const EXIT_INDEX: usize = 6;
 /// Indices after which a visual separator row is drawn.
 const SEPARATORS_AFTER: &[usize] = &[2, 4];
 
-impl Default for RootMenu {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl RootMenu {
-    /// Construct a root menu with the cursor on the first item.
+    /// Construct a root menu with the cursor on the first item and
+    /// snapshotting `initial_config` for forwarding to sub-dialogs
+    /// (currently [`SerialPortSetupDialog`]).
     #[must_use]
-    pub const fn new() -> Self {
+    pub const fn new(initial_config: SerialConfig) -> Self {
         Self {
             items: ITEMS,
             selected: 0,
+            initial_config,
         }
     }
 
@@ -95,15 +100,20 @@ impl RootMenu {
         }
     }
 
-    /// Handle the Enter key. Exit item closes; everything else pushes
-    /// a placeholder child dialog (T12+ replaces placeholders with
-    /// real dialogs).
+    /// Handle the Enter key. Exit item closes; the "Serial port setup"
+    /// row pushes the real [`SerialPortSetupDialog`] (T12); everything
+    /// else still pushes a placeholder until its real dialog lands
+    /// (T13+).
     fn activate(&self) -> DialogOutcome {
-        if self.selected == EXIT_INDEX {
-            DialogOutcome::Close
-        } else {
-            let title = self.items[self.selected];
-            DialogOutcome::Push(Box::new(PlaceholderDialog::new(title)))
+        match self.selected {
+            EXIT_INDEX => DialogOutcome::Close,
+            SERIAL_PORT_SETUP_INDEX => {
+                DialogOutcome::Push(Box::new(SerialPortSetupDialog::new(self.initial_config)))
+            }
+            _ => {
+                let title = self.items[self.selected];
+                DialogOutcome::Push(Box::new(PlaceholderDialog::new(title)))
+            }
         }
     }
 }
@@ -174,29 +184,33 @@ mod tests {
         KeyEvent::new(code, KeyModifiers::NONE)
     }
 
+    fn menu() -> RootMenu {
+        RootMenu::new(SerialConfig::default())
+    }
+
     #[test]
     fn root_menu_starts_on_first_item() {
-        let m = RootMenu::new();
+        let m = menu();
         assert_eq!(m.selected(), 0);
     }
 
     #[test]
     fn root_menu_down_moves_selection() {
-        let mut m = RootMenu::new();
+        let mut m = menu();
         m.handle_key(key(KeyCode::Down));
         assert_eq!(m.selected(), 1);
     }
 
     #[test]
     fn root_menu_up_wraps_from_first() {
-        let mut m = RootMenu::new();
+        let mut m = menu();
         m.handle_key(key(KeyCode::Up));
         assert_eq!(m.selected(), 6);
     }
 
     #[test]
     fn root_menu_down_wraps_from_last() {
-        let mut m = RootMenu::new();
+        let mut m = menu();
         for _ in 0..6 {
             m.handle_key(key(KeyCode::Down));
         }
@@ -207,7 +221,7 @@ mod tests {
 
     #[test]
     fn j_k_vim_bindings_work() {
-        let mut m = RootMenu::new();
+        let mut m = menu();
         m.handle_key(key(KeyCode::Char('j')));
         assert_eq!(m.selected(), 1);
         m.handle_key(key(KeyCode::Char('k')));
@@ -215,8 +229,8 @@ mod tests {
     }
 
     #[test]
-    fn enter_on_first_item_pushes_serial_setup_placeholder() {
-        let mut m = RootMenu::new();
+    fn enter_on_first_item_pushes_serial_setup_dialog() {
+        let mut m = menu();
         let out = m.handle_key(key(KeyCode::Enter));
         match out {
             DialogOutcome::Push(d) => assert_eq!(d.title(), "Serial port setup"),
@@ -226,7 +240,7 @@ mod tests {
 
     #[test]
     fn enter_on_exit_closes_menu() {
-        let mut m = RootMenu::new();
+        let mut m = menu();
         for _ in 0..6 {
             m.handle_key(key(KeyCode::Down));
         }
@@ -237,16 +251,27 @@ mod tests {
 
     #[test]
     fn esc_closes() {
-        let mut m = RootMenu::new();
+        let mut m = menu();
         let out = m.handle_key(key(KeyCode::Esc));
         assert!(matches!(out, DialogOutcome::Close));
     }
 
     #[test]
     fn unknown_key_is_consumed_no_movement() {
-        let mut m = RootMenu::new();
+        let mut m = menu();
         let out = m.handle_key(key(KeyCode::Char('x')));
         assert!(matches!(out, DialogOutcome::Consumed));
+        assert_eq!(m.selected(), 0);
+    }
+
+    #[test]
+    fn new_takes_serial_config() {
+        // Compile-time check that RootMenu::new accepts a SerialConfig.
+        let cfg = SerialConfig {
+            baud_rate: 9600,
+            ..SerialConfig::default()
+        };
+        let m = RootMenu::new(cfg);
         assert_eq!(m.selected(), 0);
     }
 }
