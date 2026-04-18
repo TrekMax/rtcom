@@ -8,6 +8,8 @@
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
+use crate::modal::DialogAction;
+
 /// What the dispatcher decided to do with an inbound key event.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Dispatch {
@@ -19,6 +21,10 @@ pub enum Dispatch {
     ClosedMenu,
     /// User requested a clean quit.
     Quit,
+    /// Dialog emitted a user-level action (apply-live, save-profile,
+    /// …). The outer runner interprets this and calls into
+    /// `rtcom-core` / `rtcom-config`.
+    Action(DialogAction),
     /// No observable side effect (parser buffering, key swallowed
     /// by the menu, etc.).
     Noop,

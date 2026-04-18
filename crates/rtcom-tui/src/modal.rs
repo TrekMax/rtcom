@@ -9,7 +9,6 @@ use rtcom_core::SerialConfig;
 
 /// What a [`Dialog`] wants the surrounding [`ModalStack`] to do after
 /// it has processed an input event.
-#[derive(Debug)]
 pub enum DialogOutcome {
     /// Dialog handled the key; stack stays as-is.
     Consumed,
@@ -18,12 +17,27 @@ pub enum DialogOutcome {
     /// Dialog produced a user-level action for the outer app to
     /// apply (e.g. save the profile, push a config change).
     Action(DialogAction),
+    /// Dialog wants to push a child dialog onto the stack.
+    /// [`ModalStack::handle_key`] performs the push automatically
+    /// and reports [`DialogOutcome::Consumed`] to the caller.
+    Push(Box<dyn Dialog + Send>),
+}
+
+impl core::fmt::Debug for DialogOutcome {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Consumed => f.write_str("Consumed"),
+            Self::Close => f.write_str("Close"),
+            Self::Action(a) => f.debug_tuple("Action").field(a).finish(),
+            Self::Push(d) => f.debug_tuple("Push").field(&d.title()).finish(),
+        }
+    }
 }
 
 /// User-level actions emitted by dialogs. The `TuiApp` orchestrator
 /// consumes these and calls into `rtcom-core` / `rtcom-config` to
 /// apply them.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DialogAction {
     /// Apply `SerialConfig` to the live session immediately (F2 path).
     ApplyLive(SerialConfig),
@@ -111,17 +125,27 @@ impl ModalStack {
     /// Route a key event to the topmost dialog. Empty stack returns
     /// [`DialogOutcome::Consumed`] (nothing to do).
     ///
-    /// Automatically handles [`DialogOutcome::Close`] by popping the
-    /// top dialog.
+    /// Automatically handles two stack-management outcomes:
+    /// - [`DialogOutcome::Close`] pops the top dialog.
+    /// - [`DialogOutcome::Push`] pushes the returned dialog onto
+    ///   the stack and reports [`DialogOutcome::Consumed`] to the
+    ///   caller (the push is an internal transition).
     pub fn handle_key(&mut self, key: KeyEvent) -> DialogOutcome {
         let Some(top) = self.stack.last_mut() else {
             return DialogOutcome::Consumed;
         };
         let outcome = top.handle_key(key);
-        if matches!(outcome, DialogOutcome::Close) {
-            self.stack.pop();
+        match outcome {
+            DialogOutcome::Close => {
+                self.stack.pop();
+                DialogOutcome::Close
+            }
+            DialogOutcome::Push(dialog) => {
+                self.stack.push(dialog);
+                DialogOutcome::Consumed
+            }
+            other => other,
         }
-        outcome
     }
 }
 

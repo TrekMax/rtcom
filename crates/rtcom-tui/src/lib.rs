@@ -9,11 +9,13 @@
 pub mod app;
 pub mod input;
 pub mod layout;
+pub mod menu;
 pub mod modal;
 pub mod serial_pane;
 pub mod terminal;
 
 pub use app::TuiApp;
 pub use input::Dispatch;
+pub use menu::{PlaceholderDialog, RootMenu};
 pub use modal::{Dialog, DialogAction, DialogOutcome, ModalStack};
 pub use serial_pane::SerialPane;

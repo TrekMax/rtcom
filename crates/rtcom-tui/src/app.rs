@@ -258,20 +258,46 @@ mod tests {
     }
 
     #[test]
-    fn second_ctrl_a_m_closes_menu() {
+    fn ctrl_a_m_second_press_is_swallowed_by_menu() {
         let bus = EventBus::new(64);
         let mut app = TuiApp::new(bus);
         // open
         let _ = app.handle_key(key(KeyCode::Char('a'), KeyModifiers::CONTROL));
         let _ = app.handle_key(key(KeyCode::Char('m'), KeyModifiers::NONE));
         assert!(app.is_menu_open());
-        // close — menu-open input handling isn't wired yet (T10+),
-        // so T9 only needs to accept the input and return Noop when
-        // menu is open. We'll wire actual closing in T11.
+        // With the modal stack wired in T11, menu-open keys go to the
+        // root dialog. `^A` reaches the dialog as `0x01` (a plain
+        // unprintable Ctrl char), which the root menu simply consumes.
+        // The menu stays open.
+        let out = app.handle_key(key(KeyCode::Char('a'), KeyModifiers::CONTROL));
+        assert!(matches!(out, Dispatch::Noop));
         let out = app.handle_key(key(KeyCode::Char('m'), KeyModifiers::NONE));
         assert!(matches!(out, Dispatch::Noop));
-        // Menu still open until T11+ wires the ModalStack.
         assert!(app.is_menu_open());
+    }
+
+    #[test]
+    fn esc_in_root_menu_closes_it() {
+        let bus = EventBus::new(64);
+        let mut app = TuiApp::new(bus);
+        let _ = app.handle_key(key(KeyCode::Char('a'), KeyModifiers::CONTROL));
+        let _ = app.handle_key(key(KeyCode::Char('m'), KeyModifiers::NONE));
+        assert!(app.is_menu_open());
+        let out = app.handle_key(key(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(matches!(out, Dispatch::ClosedMenu));
+        assert!(!app.is_menu_open());
+    }
+
+    #[test]
+    fn main_screen_80x24_menu_open_snapshot() {
+        let bus = EventBus::new(64);
+        let mut app = TuiApp::new(bus);
+        app.set_device_summary("/dev/ttyUSB0", "115200 8N1 none");
+        let _ = app.handle_key(key(KeyCode::Char('a'), KeyModifiers::CONTROL));
+        let _ = app.handle_key(key(KeyCode::Char('m'), KeyModifiers::NONE));
+        assert!(app.is_menu_open());
+        let terminal = render_app(&mut app, 80, 24);
+        insta::assert_snapshot!(terminal.backend());
     }
 
     #[test]
