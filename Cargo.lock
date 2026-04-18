@@ -653,7 +653,6 @@ name = "rtcom-config"
 version = "0.1.2"
 dependencies = [
  "serde",
- "thiserror 1.0.69",
  "toml",
 ]
 
