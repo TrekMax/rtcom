@@ -2,6 +2,7 @@
 
 use crossterm::event::KeyEvent;
 use ratatui::{
+    layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::Paragraph,
@@ -20,6 +21,7 @@ use crate::{
     menu::RootMenu,
     modal::{DialogOutcome, ModalStack},
     serial_pane::SerialPane,
+    toast::{render_toasts, ToastLevel, ToastQueue},
 };
 
 /// Owns the TUI render state and input dispatcher.
@@ -62,6 +64,12 @@ pub struct TuiApp {
     /// instances so the T15 [`crate::menu::ScreenOptionsDialog`] opens
     /// with the live value.
     current_modal_style: ModalStyle,
+    /// Queue of timed toast notifications. Populated by the runner's
+    /// bus-event handler for [`Event::ProfileSaved`] /
+    /// [`Event::ProfileLoadFailed`] / [`Event::Error`]. Rendered on
+    /// top of the main chrome + modal in [`TuiApp::render`] so
+    /// outcome messages are always visible.
+    toasts: ToastQueue,
 }
 
 impl TuiApp {
@@ -87,7 +95,26 @@ impl TuiApp {
             current_line_endings: LineEndingConfig::default(),
             current_modem: ModemLineSnapshot::default(),
             current_modal_style: ModalStyle::default(),
+            toasts: ToastQueue::new(),
         }
+    }
+
+    /// Push a new toast onto the queue. Consumed by the runner's
+    /// bus-event handler for profile IO + error events.
+    pub fn push_toast(&mut self, message: impl Into<String>, level: ToastLevel) {
+        self.toasts.push(message, level);
+    }
+
+    /// Mutable access to the toast queue. Mainly used by tests and
+    /// the main-loop tick to advance expiration.
+    pub fn toasts_mut(&mut self) -> &mut ToastQueue {
+        &mut self.toasts
+    }
+
+    /// Immutable borrow of the toast queue (read-only introspection).
+    #[must_use]
+    pub const fn toasts(&self) -> &ToastQueue {
+        &self.toasts
     }
 
     /// Update the cached [`SerialConfig`] that new [`RootMenu`] pushes
@@ -290,9 +317,30 @@ impl TuiApp {
 
         // Modal overlay: topmost dialog drawn at its preferred size.
         if self.menu_open {
-            if let Some(top) = self.modal_stack.top() {
-                let dialog_area = top.preferred_size(area);
-                top.render(dialog_area, f.buffer_mut());
+            if let Some(top_dialog) = self.modal_stack.top() {
+                let dialog_area = top_dialog.preferred_size(area);
+                top_dialog.render(dialog_area, f.buffer_mut());
+            }
+        }
+
+        // Toast overlay: tick to drop expired entries, then draw the
+        // remainder on top of the main chrome *and* the modal so
+        // outcome messages stay visible regardless of menu state.
+        self.toasts.tick();
+        if !self.toasts.is_empty() {
+            // Reserve up to max_visible rows immediately below the top
+            // bar; clamp so we never overflow the terminal height.
+            let height = u16::try_from(self.toasts.visible_count())
+                .unwrap_or(u16::MAX)
+                .min(area.height.saturating_sub(top.height));
+            if height > 0 {
+                let toast_area = Rect {
+                    x: area.x,
+                    y: area.y + top.height,
+                    width: area.width,
+                    height,
+                };
+                render_toasts(&self.toasts, toast_area, f.buffer_mut());
             }
         }
     }
@@ -436,5 +484,28 @@ mod tests {
         let mut app = TuiApp::new(bus);
         let out = app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
         assert!(matches!(out, Dispatch::TxBytes(ref b) if b == b"\r"));
+    }
+
+    #[test]
+    fn push_toast_appears_in_queue() {
+        let bus = EventBus::new(64);
+        let mut app = TuiApp::new(bus);
+        assert_eq!(app.toasts().visible_count(), 0);
+        app.push_toast("saved", crate::toast::ToastLevel::Info);
+        assert_eq!(app.toasts().visible_count(), 1);
+        assert_eq!(app.toasts().visible()[0].message, "saved");
+    }
+
+    #[test]
+    fn main_screen_80x24_with_toast_snapshot() {
+        let bus = EventBus::new(64);
+        let mut app = TuiApp::new(bus);
+        app.set_device_summary("/dev/ttyUSB0", "115200 8N1 none");
+        app.push_toast(
+            "profile saved: ~/.config/rtcom/default.toml",
+            crate::toast::ToastLevel::Info,
+        );
+        let terminal = render_app(&mut app, 80, 24);
+        insta::assert_snapshot!(terminal.backend());
     }
 }

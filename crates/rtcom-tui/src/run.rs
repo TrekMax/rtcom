@@ -21,6 +21,7 @@
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use crossterm::event::{Event as CtEvent, EventStream, KeyEvent, KeyEventKind};
@@ -41,6 +42,7 @@ use crate::{
         line_endings_from_profile, serial_config_to_section, serial_section_to_config,
     },
     terminal::{AltScreenGuard, RawModeGuard},
+    toast::ToastLevel,
 };
 
 /// Drive the TUI main loop until cancelled or the user requests quit.
@@ -95,6 +97,15 @@ pub async fn run(
 
     let mut keys = EventStream::new();
 
+    // Periodic 100ms tick so toast expiration happens even when the
+    // user is idle and no bus events arrive. `tick()` is also called
+    // inside `TuiApp::render`, so the interval's job here is purely
+    // to trigger a redraw; we ignore the returned `Instant`.
+    let mut toast_tick = tokio::time::interval(Duration::from_millis(100));
+    // Consume the immediate first tick so we don't redraw twice on
+    // entry (we already drew the seed frame below).
+    toast_tick.tick().await;
+
     // Seed frame so the user sees the chrome before any input.
     terminal
         .draw(|f| app.render(f))
@@ -148,6 +159,12 @@ pub async fn run(
                 if !handle_bus_event(bus_ev, &mut app) {
                     break;
                 }
+            }
+
+            _ = toast_tick.tick() => {
+                // Nothing to do here: the expiration call happens
+                // inside TuiApp::render just below. This arm exists
+                // so the loop wakes up to redraw.
             }
         }
 
@@ -370,6 +387,11 @@ const fn action_to_command(action: &DialogAction) -> Option<Command> {
 
 /// Process a single bus event. Returns `false` when the caller should
 /// break out of the event loop (bus closed).
+///
+/// T19 adds toast arms for [`Event::ProfileSaved`] /
+/// [`Event::ProfileLoadFailed`] / [`Event::Error`]; these continue to
+/// log via `tracing` as well so external log subscribers (e.g., the
+/// v0.2.x log-file writer) see the same stream.
 fn handle_bus_event(
     bus_ev: std::result::Result<Event, broadcast::error::RecvError>,
     app: &mut TuiApp,
@@ -392,16 +414,29 @@ fn handle_bus_event(
         }
         Ok(Event::Error(e)) => {
             tracing::error!(%e, "bus error");
-            // T19 surfaces errors as an in-TUI toast.
+            app.push_toast(format!("error: {e}"), ToastLevel::Error);
         }
         Ok(Event::ModemLinesChanged { dtr, rts }) => {
             app.set_modem_lines(ModemLineSnapshot { dtr, rts });
         }
+        Ok(Event::ProfileSaved { path }) => {
+            app.push_toast(
+                format!("profile saved: {}", path.display()),
+                ToastLevel::Info,
+            );
+        }
+        Ok(Event::ProfileLoadFailed { path, error }) => {
+            tracing::error!(%error, path = %path.display(), "profile IO failed");
+            app.push_toast(
+                format!("profile IO failed ({}): {error}", path.display()),
+                ToastLevel::Error,
+            );
+        }
         // `rtcom_core::Event` is `#[non_exhaustive]` so the wildcard
         // tail here both covers known-but-ignored variants
-        // (MenuOpened/Closed, ProfileSaved/LoadFailed, Command,
-        // TxBytes, DeviceConnected) and any future additions — the
-        // TUI doesn't need to change to stay forward-compatible.
+        // (MenuOpened/Closed, Command, TxBytes, DeviceConnected) and
+        // any future additions — the TUI doesn't need to change to
+        // stay forward-compatible.
         Ok(_) => {}
         Err(broadcast::error::RecvError::Closed) => {
             // Bus closed; no more events to process.
@@ -800,6 +835,63 @@ mod tests {
             Event::ProfileSaved { path: p } => assert_eq!(p, path),
             other => panic!("expected ProfileSaved, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn handle_bus_event_profile_saved_pushes_info_toast() {
+        let bus = EventBus::new(8);
+        let mut app = TuiApp::new(bus);
+        assert_eq!(app.toasts_mut().visible_count(), 0);
+        assert!(handle_bus_event(
+            Ok(Event::ProfileSaved {
+                path: std::path::PathBuf::from("/tmp/x.toml"),
+            }),
+            &mut app,
+        ));
+        assert_eq!(app.toasts_mut().visible_count(), 1);
+        assert_eq!(
+            app.toasts_mut().visible()[0].level,
+            crate::toast::ToastLevel::Info
+        );
+        assert!(app.toasts_mut().visible()[0]
+            .message
+            .contains("/tmp/x.toml"));
+    }
+
+    #[tokio::test]
+    async fn handle_bus_event_profile_load_failed_pushes_error_toast() {
+        let bus = EventBus::new(8);
+        let mut app = TuiApp::new(bus);
+        let err = rtcom_core::Error::InvalidConfig("bad toml".to_string());
+        assert!(handle_bus_event(
+            Ok(Event::ProfileLoadFailed {
+                path: std::path::PathBuf::from("/tmp/bad.toml"),
+                error: Arc::new(err),
+            }),
+            &mut app,
+        ));
+        assert_eq!(app.toasts_mut().visible_count(), 1);
+        assert_eq!(
+            app.toasts_mut().visible()[0].level,
+            crate::toast::ToastLevel::Error
+        );
+        assert!(app.toasts_mut().visible()[0]
+            .message
+            .contains("/tmp/bad.toml"));
+    }
+
+    #[tokio::test]
+    async fn handle_bus_event_error_pushes_error_toast() {
+        let bus = EventBus::new(8);
+        let mut app = TuiApp::new(bus);
+        let err = rtcom_core::Error::InvalidConfig("boom".to_string());
+        assert!(handle_bus_event(Ok(Event::Error(Arc::new(err))), &mut app));
+        assert_eq!(app.toasts_mut().visible_count(), 1);
+        assert_eq!(
+            app.toasts_mut().visible()[0].level,
+            crate::toast::ToastLevel::Error
+        );
+        assert!(app.toasts_mut().visible()[0].message.contains("boom"));
     }
 
     #[tokio::test]
