@@ -242,9 +242,29 @@ jobs:
           cargo publish -p rtcom-core --no-verify --allow-dirty \
             || echo "::warning::rtcom-core publish skipped (already on crates.io?)"
 
-      - name: Wait for index propagation
+      - name: Wait for index propagation (core)
         # crates.io's sparse index is fast but not instant. Cargo on the
         # next step needs the just-published version to be visible.
+        run: sleep 45
+
+      - name: Publish rtcom-config
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          cargo publish -p rtcom-config --no-verify --allow-dirty \
+            || echo "::warning::rtcom-config publish skipped (already on crates.io?)"
+
+      - name: Wait for index propagation (config)
+        run: sleep 45
+
+      - name: Publish rtcom-tui
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          cargo publish -p rtcom-tui --no-verify --allow-dirty \
+            || echo "::warning::rtcom-tui publish skipped (already on crates.io?)"
+
+      - name: Wait for index propagation (tui)
         run: sleep 45
 
       - name: Publish rtcom-cli

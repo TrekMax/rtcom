@@ -3,7 +3,7 @@ source: crates/rtcom-tui/src/app.rs
 assertion_line: 575
 expression: terminal.backend()
 ---
-" rtcom 0.2.0   /dev/ttyUSB0  115200 8N1 none                                                                            "
+" rtcom 0.2.1   /dev/ttyUSB0  115200 8N1 none                                                                            "
 "█                                                                                                                       "
 "                                                                                                                        "
 "                                                                                                                        "

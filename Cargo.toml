@@ -3,7 +3,7 @@ members = ["crates/*"]
 resolver = "2"
 
 [workspace.package]
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 rust-version = "1.88"
 license = "Apache-2.0"
@@ -34,9 +34,9 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 bytes = "1"
 futures = "0.3"
-rtcom-core = { path = "crates/rtcom-core", version = "0.2.0" }
-rtcom-config = { path = "crates/rtcom-config", version = "0.2.0" }
-rtcom-tui = { path = "crates/rtcom-tui", version = "0.2.0" }
+rtcom-core = { path = "crates/rtcom-core", version = "0.2.1" }
+rtcom-config = { path = "crates/rtcom-config", version = "0.2.1" }
+rtcom-tui = { path = "crates/rtcom-tui", version = "0.2.1" }
 
 [workspace.lints.rust]
 unsafe_code = "deny"

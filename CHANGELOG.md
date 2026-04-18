@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] — 2026-04-18
+
+Patch release cleaning up the partially-published v0.2.0: `rtcom-core
+0.2.0` made it to crates.io, but `rtcom-config`, `rtcom-tui`, and
+`rtcom-cli` did not — this release ships the full four-crate set and
+folds in the post-tag security updates.
+
+### Changed
+
+- **MSRV bumped from 1.85 to 1.88** (driven by the dependency
+  upgrades below).
+
+### Security / Dependencies
+
+- Upgraded `ratatui` `0.28` → `0.30` and `tui-term` `0.1` → `0.3` to
+  pick up `lru 0.16.3+`, which patches [GHSA-rhfx-m35p-ff5j]
+  (`IterMut` Stacked Borrows soundness; CVSS v4 LOW 2.7). `lru` is a
+  transitive dep via `ratatui-core`; the advisory is not reachable
+  from rtcom's own code but the fix flows in automatically. Also
+  pulls `vt100` `0.15` → `0.16` to match tui-term 0.3's `Screen`
+  trait bound.
+- Upgraded `time` to `0.3.47+` to patch [GHSA-r6v5-fh4h-64xc] (stack
+  exhaustion DoS via untrusted time parsing; Medium severity). rtcom
+  does not parse time from untrusted input, so the risk is low, but
+  the patched version is free to pick up once MSRV allows it.
+- Added `.github/dependabot.yml` that ignores the `rand < 0.9.3`
+  advisory ([GHSA-cq8v-f236-94qc], CVSS 0 Low). `rand 0.8.6` appears
+  in `Cargo.lock` only as a ghost entry pulled by the unused
+  `termwiz` feature of `ratatui` (via `phf_generator`); `cargo tree
+  --workspace --all-features` confirms it is never compiled into the
+  binary.
+
+### Fixed (release pipeline)
+
+- `release.yml` now publishes all four crates in dependency order
+  (`rtcom-core` → `rtcom-config` → `rtcom-tui` → `rtcom-cli`).
+  Previously only `rtcom-core` and `rtcom-cli` were listed; the
+  `rtcom-cli` step failed during v0.2.0 because its path deps were
+  not yet on crates.io.
+
 ## [0.2.0] — 2026-04-18
 
 ### Added
@@ -46,9 +86,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **BREAKING**: rtcom now requires a real TTY on stdin/stdout; piping
   through a non-TTY process no longer works.
 - **BREAKING**: the v0.1 stdout line-by-line renderer is removed.
-- **MSRV bumped from 1.85 to 1.88** as a consequence of the ratatui
-  0.30 upgrade and the `time 0.3.47` patched release (see Security /
-  Dependencies below).
 - `rtcom-cli` no longer owns the terminal lifecycle — delegated to
   `rtcom-tui`.
 - `crossterm` bumped from 0.27 to 0.28 (ratatui transitive unification).
@@ -63,33 +100,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to translate the minicom rule names.
 - `docs/tui.md` gains a "Line endings recipes" section with
   symptom→cure guidance for common device behaviors.
-
-### Security / Dependencies
-
-- Upgraded `ratatui` `0.28` → `0.30` and `tui-term` `0.1` → `0.3` to
-  pick up `lru 0.16.3+`, which patches [GHSA-rhfx-m35p-ff5j]
-  (`IterMut` Stacked Borrows soundness; CVSS v4 LOW 2.7). `lru` is a
-  transitive dep via ratatui-core; the advisory is not reachable from
-  rtcom's own code but the fix flows in automatically. Also pulls
-  `vt100` `0.15` → `0.16` to match tui-term 0.3's `Screen` trait
-  bound.
-- Bumped `time` to `0.3.47+` (from the previously pinned `0.3.41`) to
-  patch [GHSA-r6v5-fh4h-64xc] (stack-exhaustion DoS via untrusted
-  time parsing; Medium severity). rtcom does not parse time from
-  untrusted input, so the risk is low, but the patched version is
-  free to pick up.
-- MSRV bumped from 1.85 to 1.88 to satisfy `time 0.3.47`'s toolchain
-  requirement.
-- Added `.github/dependabot.yml` that ignores the `rand < 0.9.3`
-  advisory ([GHSA-cq8v-f236-94qc], CVSS 0 Low): `rand 0.8.6` appears
-  in `Cargo.lock` only as a ghost entry pulled by the unused
-  `termwiz` feature of ratatui (via `phf_generator`). `cargo tree
-  --workspace --all-features` confirms it is never compiled. The
-  ignore rule keeps Dependabot silent without masking a real issue.
-
-[GHSA-rhfx-m35p-ff5j]: https://github.com/advisories/GHSA-rhfx-m35p-ff5j
-[GHSA-r6v5-fh4h-64xc]: https://github.com/advisories/GHSA-r6v5-fh4h-64xc
-[GHSA-cq8v-f236-94qc]: https://github.com/advisories/GHSA-cq8v-f236-94qc
 
 ### Deprecated
 
@@ -288,8 +298,13 @@ use cases.
 - GitHub Actions CI matrix (ubuntu / macos / windows) running fmt,
   clippy `-D warnings`, tests, and `cargo doc -D warnings`.
 
-[Unreleased]: https://github.com/TrekMax/rtcom/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/TrekMax/rtcom/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/TrekMax/rtcom/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/TrekMax/rtcom/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/TrekMax/rtcom/releases/tag/v0.1.2
 [0.1.1]: https://github.com/TrekMax/rtcom/releases/tag/v0.1.1
 [0.1.0]: https://github.com/TrekMax/rtcom/releases/tag/v0.1.0
+
+[GHSA-rhfx-m35p-ff5j]: https://github.com/advisories/GHSA-rhfx-m35p-ff5j
+[GHSA-r6v5-fh4h-64xc]: https://github.com/advisories/GHSA-r6v5-fh4h-64xc
+[GHSA-cq8v-f236-94qc]: https://github.com/advisories/GHSA-cq8v-f236-94qc
