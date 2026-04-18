@@ -135,6 +135,12 @@ pub struct Cli {
     /// Merges CLI-provided fields over the loaded profile, then persists
     /// the result before starting the session. Fails hard when no profile
     /// path is available (no `-c PATH` and no discoverable home).
+    ///
+    /// **v0.2 scope:** only the `[serial]` section is updated on save.
+    /// `--omap/--imap/--emap`, modem lines and screen options pass through
+    /// from the loaded profile unchanged. Menu-driven line-ending and modem
+    /// persistence lands with the Line endings / Modem control dialogs in
+    /// later v0.2 tasks.
     #[arg(long = "save")]
     pub save: bool,
 }
