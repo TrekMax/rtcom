@@ -10,13 +10,13 @@
 //!    Windows).
 //! 5. Build a tokio runtime and run `async_main`, which opens the
 //!    device, constructs a [`Session`], seeds a [`rtcom_tui::TuiApp`],
-//!    and drives [`rtcom_tui::run`] until the user quits or a signal
+//!    and drives [`rtcom_tui::run()`] until the user quits or a signal
 //!    trips the cancellation token.
 //!
 //! `UucpLock` is an RAII handle bound to the synchronous `main` so its
 //! `Drop` fires after the runtime block returns — even on
 //! signal-driven shutdown. Raw mode / alt screen are owned by
-//! [`rtcom_tui::run`] and restore on every exit path it takes.
+//! [`rtcom_tui::run()`] and restore on every exit path it takes.
 //!
 //! Dialog-level actions (apply-live, save-profile, …) are *logged*
 //! in this task and wired into [`Session`] / profile IO by follow-up
