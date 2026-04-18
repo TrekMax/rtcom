@@ -283,7 +283,8 @@ impl TuiApp {
     /// size every frame so it follows terminal resizes.
     ///
     /// When the configuration menu is open, the body is drawn according
-    /// to [`Self::current_modal_style`]:
+    /// to the current [`ModalStyle`] (set via
+    /// [`TuiApp::set_modal_style`]):
     ///
     /// - [`ModalStyle::Overlay`]: serial pane drawn normally; the
     ///   modal dialog is painted over it at its preferred size.
@@ -543,5 +544,134 @@ mod tests {
         );
         let terminal = render_app(&mut app, 80, 24);
         insta::assert_snapshot!(terminal.backend());
+    }
+
+    // ----- T20: ModalStyle render matrix -----
+
+    /// Helper: open the configuration menu via `^A m`. Leaves the root
+    /// dialog on top of the modal stack.
+    fn open_menu(app: &mut TuiApp) {
+        let _ = app.handle_key(key(KeyCode::Char('a'), KeyModifiers::CONTROL));
+        let _ = app.handle_key(key(KeyCode::Char('m'), KeyModifiers::NONE));
+        assert!(app.is_menu_open());
+    }
+
+    #[test]
+    fn main_screen_120x40_empty_snapshot() {
+        let bus = EventBus::new(64);
+        let mut app = TuiApp::new(bus);
+        app.set_device_summary("/dev/ttyUSB0", "115200 8N1 none");
+        let terminal = render_app(&mut app, 120, 40);
+        insta::assert_snapshot!(terminal.backend());
+    }
+
+    #[test]
+    fn main_screen_120x40_menu_open_overlay_snapshot() {
+        let bus = EventBus::new(64);
+        let mut app = TuiApp::new(bus);
+        app.set_device_summary("/dev/ttyUSB0", "115200 8N1 none");
+        open_menu(&mut app);
+        let terminal = render_app(&mut app, 120, 40);
+        insta::assert_snapshot!(terminal.backend());
+    }
+
+    #[test]
+    fn main_screen_80x24_menu_open_dimmed_overlay_snapshot() {
+        let bus = EventBus::new(64);
+        let mut app = TuiApp::new(bus);
+        app.set_device_summary("/dev/ttyUSB0", "115200 8N1 none");
+        app.set_modal_style(ModalStyle::DimmedOverlay);
+        // Seed the serial pane so dimming is applied over visible
+        // content (the DIM modifier is invisible in TestBackend's
+        // text output, but the content itself should still appear).
+        app.serial_pane_mut()
+            .ingest(b"background line one\r\nbackground line two\r\n");
+        open_menu(&mut app);
+        let terminal = render_app(&mut app, 80, 24);
+        insta::assert_snapshot!(terminal.backend());
+    }
+
+    #[test]
+    fn main_screen_80x24_menu_open_fullscreen_snapshot() {
+        let bus = EventBus::new(64);
+        let mut app = TuiApp::new(bus);
+        app.set_device_summary("/dev/ttyUSB0", "115200 8N1 none");
+        app.set_modal_style(ModalStyle::Fullscreen);
+        // Content ingested but should NOT appear: fullscreen hides the
+        // serial pane entirely while the menu is open.
+        app.serial_pane_mut().ingest(b"hidden background\r\n");
+        open_menu(&mut app);
+        let terminal = render_app(&mut app, 80, 24);
+        insta::assert_snapshot!(terminal.backend());
+    }
+
+    // ----- T20: direct buffer inspection tests -----
+    //
+    // TestBackend's `Display` impl only emits cell symbols, so a
+    // snapshot alone cannot distinguish DimmedOverlay from Overlay.
+    // These tests inspect the rendered buffer to verify each
+    // ModalStyle actually has the intended effect on cell styles.
+
+    fn dim_probe_at(app: &mut TuiApp, width: u16, height: u16) -> ratatui::style::Style {
+        use ratatui::layout::Position;
+        let backend = TestBackend::new(width, height);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| app.render(f)).unwrap();
+        // (0, 1) = first column of the first body row (below the top
+        // bar). Well outside the centered modal on an 80x24 screen.
+        let buf = terminal.backend().buffer();
+        buf.cell(Position::new(0, 1)).unwrap().style()
+    }
+
+    #[test]
+    fn dimmed_overlay_actually_dims_body_cells() {
+        let bus = EventBus::new(64);
+        let mut app = TuiApp::new(bus);
+        app.set_device_summary("/dev/ttyUSB0", "115200 8N1 none");
+        app.set_modal_style(ModalStyle::DimmedOverlay);
+        app.serial_pane_mut().ingest(b"hello\r\n");
+        open_menu(&mut app);
+        let style = dim_probe_at(&mut app, 80, 24);
+        assert!(
+            style.add_modifier.contains(Modifier::DIM),
+            "expected DIM on body cell outside modal, got {style:?}"
+        );
+    }
+
+    #[test]
+    fn overlay_does_not_dim_body_cells() {
+        let bus = EventBus::new(64);
+        let mut app = TuiApp::new(bus);
+        app.set_device_summary("/dev/ttyUSB0", "115200 8N1 none");
+        // Default is Overlay.
+        assert_eq!(app.current_modal_style, ModalStyle::Overlay);
+        app.serial_pane_mut().ingest(b"hello\r\n");
+        open_menu(&mut app);
+        let style = dim_probe_at(&mut app, 80, 24);
+        assert!(
+            !style.add_modifier.contains(Modifier::DIM),
+            "expected no DIM on body cell with Overlay style, got {style:?}"
+        );
+    }
+
+    #[test]
+    fn fullscreen_menu_hides_serial_pane_content() {
+        let bus = EventBus::new(64);
+        let mut app = TuiApp::new(bus);
+        app.set_device_summary("/dev/ttyUSB0", "115200 8N1 none");
+        app.set_modal_style(ModalStyle::Fullscreen);
+        // Distinctive marker that would appear in the top-left of the
+        // body if the serial pane were drawn.
+        app.serial_pane_mut().ingest(b"ZZZZZ-secret-marker\r\n");
+        open_menu(&mut app);
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| app.render(f)).unwrap();
+        let rendered = format!("{}", terminal.backend());
+        assert!(
+            !rendered.contains("ZZZZZ-secret-marker"),
+            "Fullscreen menu should hide serial pane content, \
+             but marker leaked into render:\n{rendered}"
+        );
     }
 }

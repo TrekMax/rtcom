@@ -1,0 +1,29 @@
+---
+source: crates/rtcom-tui/src/app.rs
+assertion_line: 590
+expression: terminal.backend()
+---
+" rtcom 0.1.2   /dev/ttyUSB0  115200 8N1 none                                    "
+"background line one                                                             "
+"background line two                                                             "
+"█                                                                               "
+"                                                                                "
+"                                                                                "
+"                         ┌Configuration───────────────┐                         "
+"                         │> Serial port setup         │                         "
+"                         │  Line endings              │                         "
+"                         │  Modem control             │                         "
+"                         │----------------------------│                         "
+"                         │  Write profile             │                         "
+"                         │  Read profile              │                         "
+"                         │----------------------------│                         "
+"                         │  Screen options            │                         "
+"                         │  Exit menu                 │                         "
+"                         │                            │                         "
+"                         └────────────────────────────┘                         "
+"                                                                                "
+"                                                                                "
+"                                                                                "
+"                                                                                "
+"                                                                                "
+" ^A m menu · ^A ? help · ^A q quit                                              "
