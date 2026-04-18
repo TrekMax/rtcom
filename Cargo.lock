@@ -883,11 +883,10 @@ name = "rtcom-cli"
 version = "0.1.2"
 dependencies = [
  "anyhow",
- "bytes",
  "clap",
- "crossterm",
  "rtcom-config",
  "rtcom-core",
+ "rtcom-tui",
  "tokio",
  "tokio-util",
  "tracing",
