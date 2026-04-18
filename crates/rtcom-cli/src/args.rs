@@ -31,77 +31,43 @@ pub struct Cli {
     /// Serial device path, e.g. `/dev/ttyUSB0` (Linux) or `COM3` (Windows).
     pub device: String,
 
-    /// Baud rate in bits per second.
-    #[arg(short, long, default_value_t = 115_200, value_name = "RATE")]
-    pub baud: u32,
+    /// Baud rate in bits per second. `None` means "use the default"
+    /// (the upcoming profile layer substitutes a persisted value when
+    /// one is configured; otherwise 115200).
+    #[arg(short, long, value_name = "RATE")]
+    pub baud: Option<u32>,
 
-    /// Data bits per frame.
-    #[arg(
-        short = 'd',
-        long = "databits",
-        value_enum,
-        default_value_t = CliDataBits::Eight,
-        value_name = "BITS",
-    )]
-    pub data_bits: CliDataBits,
+    /// Data bits per frame. `None` → default (8).
+    #[arg(short = 'd', long = "databits", value_enum, value_name = "BITS")]
+    pub data_bits: Option<CliDataBits>,
 
-    /// Stop bits per frame.
-    #[arg(
-        short = 's',
-        long = "stopbits",
-        value_enum,
-        default_value_t = CliStopBits::One,
-        value_name = "BITS",
-    )]
-    pub stop_bits: CliStopBits,
+    /// Stop bits per frame. `None` → default (1).
+    #[arg(short = 's', long = "stopbits", value_enum, value_name = "BITS")]
+    pub stop_bits: Option<CliStopBits>,
 
-    /// Parity mode.
-    #[arg(
-        short = 'p',
-        long,
-        value_enum,
-        default_value_t = CliParity::None,
-        value_name = "MODE",
-    )]
-    pub parity: CliParity,
+    /// Parity mode. `None` → default (none).
+    #[arg(short = 'p', long, value_enum, value_name = "MODE")]
+    pub parity: Option<CliParity>,
 
-    /// Flow-control mode.
-    #[arg(
-        short = 'f',
-        long,
-        value_enum,
-        default_value_t = CliFlow::None,
-        value_name = "MODE",
-    )]
-    pub flow: CliFlow,
+    /// Flow-control mode. `None` → default (none).
+    #[arg(short = 'f', long, value_enum, value_name = "MODE")]
+    pub flow: Option<CliFlow>,
 
     /// Outbound line-ending mapping. See [`CliLineEnding`] for the rules.
-    #[arg(
-        long,
-        value_enum,
-        default_value_t = CliLineEnding::None,
-        value_name = "RULE",
-    )]
-    pub omap: CliLineEnding,
+    /// `None` → default (no transformation).
+    #[arg(long, value_enum, value_name = "RULE")]
+    pub omap: Option<CliLineEnding>,
 
     /// Inbound line-ending mapping. See [`CliLineEnding`] for the rules.
-    #[arg(
-        long,
-        value_enum,
-        default_value_t = CliLineEnding::None,
-        value_name = "RULE",
-    )]
-    pub imap: CliLineEnding,
+    /// `None` → default (no transformation).
+    #[arg(long, value_enum, value_name = "RULE")]
+    pub imap: Option<CliLineEnding>,
 
     /// Echo line-ending mapping. Accepted for parity with picocom; the
     /// echo path itself wires up in a later issue.
-    #[arg(
-        long,
-        value_enum,
-        default_value_t = CliLineEnding::None,
-        value_name = "RULE",
-    )]
-    pub emap: CliLineEnding,
+    /// `None` → default (no transformation).
+    #[arg(long, value_enum, value_name = "RULE")]
+    pub emap: Option<CliLineEnding>,
 
     /// Deassert DTR immediately after opening the device (picocom
     /// `--lower-dtr`). Useful for boards that wire DTR to reset/boot
@@ -156,15 +122,18 @@ pub struct Cli {
 
 impl Cli {
     /// Projects the parsed arguments into the [`SerialConfig`] consumed by
-    /// `rtcom-core`.
+    /// `rtcom-core`. Unspecified fields resolve to the historical CLI
+    /// defaults (115200 / 8N1 / no flow control) — the upcoming profile
+    /// layer will replace this inline fallback with profile-driven
+    /// merging.
     #[must_use]
     pub fn to_serial_config(&self) -> SerialConfig {
         SerialConfig {
-            baud_rate: self.baud,
-            data_bits: self.data_bits.into(),
-            stop_bits: self.stop_bits.into(),
-            parity: self.parity.into(),
-            flow_control: self.flow.into(),
+            baud_rate: self.baud.unwrap_or(115_200),
+            data_bits: self.data_bits.unwrap_or(CliDataBits::Eight).into(),
+            stop_bits: self.stop_bits.unwrap_or(CliStopBits::One).into(),
+            parity: self.parity.unwrap_or(CliParity::None).into(),
+            flow_control: self.flow.unwrap_or(CliFlow::None).into(),
             read_timeout: DEFAULT_READ_TIMEOUT,
         }
     }
@@ -247,9 +216,10 @@ impl From<CliParity> for Parity {
 
 /// CLI-facing line-ending mapping enum (used by `--omap`, `--imap`,
 /// `--emap`). Names follow the picocom convention.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, ValueEnum)]
 pub enum CliLineEnding {
     /// No transformation (default).
+    #[default]
     None,
     /// LF → CRLF (picocom `crlf`).
     Crlf,
@@ -336,11 +306,14 @@ mod tests {
     fn default_values_are_115200_8n1() {
         let cli = Cli::parse_from(["rtcom", "/dev/ttyUSB0"]);
         assert_eq!(cli.device, "/dev/ttyUSB0");
-        assert_eq!(cli.baud, 115_200);
-        assert_eq!(cli.data_bits, CliDataBits::Eight);
-        assert_eq!(cli.stop_bits, CliStopBits::One);
-        assert_eq!(cli.parity, CliParity::None);
-        assert_eq!(cli.flow, CliFlow::None);
+        // Profile-backed fields default to `None` so a profile layer
+        // (landing in the next commit) can tell "user omitted the flag"
+        // from "user explicitly passed the historical default".
+        assert_eq!(cli.baud, None);
+        assert_eq!(cli.data_bits, None);
+        assert_eq!(cli.stop_bits, None);
+        assert_eq!(cli.parity, None);
+        assert_eq!(cli.flow, None);
         assert!(!cli.no_reset);
         assert!(!cli.echo);
         assert!(!cli.quiet);
@@ -351,8 +324,8 @@ mod tests {
     #[test]
     fn parses_baud_and_parity() {
         let cli = Cli::parse_from(["rtcom", "/dev/ttyUSB0", "-b", "9600", "-p", "even"]);
-        assert_eq!(cli.baud, 9600);
-        assert_eq!(cli.parity, CliParity::Even);
+        assert_eq!(cli.baud, Some(9600));
+        assert_eq!(cli.parity, Some(CliParity::Even));
     }
 
     #[test]
@@ -371,11 +344,17 @@ mod tests {
             "-f",
             "hw",
         ]);
-        assert_eq!(cli.baud, 921_600);
-        assert_eq!(cli.data_bits, CliDataBits::Seven);
-        assert_eq!(cli.stop_bits, CliStopBits::Two);
-        assert_eq!(cli.parity, CliParity::Odd);
-        assert_eq!(cli.flow, CliFlow::Hardware);
+        assert_eq!(cli.baud, Some(921_600));
+        assert_eq!(cli.data_bits, Some(CliDataBits::Seven));
+        assert_eq!(cli.stop_bits, Some(CliStopBits::Two));
+        assert_eq!(cli.parity, Some(CliParity::Odd));
+        assert_eq!(cli.flow, Some(CliFlow::Hardware));
+    }
+
+    #[test]
+    fn baud_is_none_when_not_specified() {
+        let cli = Cli::parse_from(["rtcom", "/dev/ttyUSB0"]);
+        assert_eq!(cli.baud, None);
     }
 
     #[test]
@@ -500,9 +479,11 @@ mod tests {
     #[test]
     fn line_ending_options_default_to_none() {
         let cli = Cli::parse_from(["rtcom", "/dev/x"]);
-        assert_eq!(cli.omap, CliLineEnding::None);
-        assert_eq!(cli.imap, CliLineEnding::None);
-        assert_eq!(cli.emap, CliLineEnding::None);
+        // `None` means "caller didn't specify", not `CliLineEnding::None`.
+        // Downstream code resolves unspecified to "no transformation".
+        assert_eq!(cli.omap, None);
+        assert_eq!(cli.imap, None);
+        assert_eq!(cli.emap, None);
     }
 
     #[test]
@@ -510,9 +491,9 @@ mod tests {
         let cli = Cli::parse_from([
             "rtcom", "/dev/x", "--omap", "crlf", "--imap", "igncr", "--emap", "lfcr",
         ]);
-        assert_eq!(cli.omap, CliLineEnding::Crlf);
-        assert_eq!(cli.imap, CliLineEnding::Igncr);
-        assert_eq!(cli.emap, CliLineEnding::Lfcr);
+        assert_eq!(cli.omap, Some(CliLineEnding::Crlf));
+        assert_eq!(cli.imap, Some(CliLineEnding::Igncr));
+        assert_eq!(cli.emap, Some(CliLineEnding::Lfcr));
     }
 
     #[test]

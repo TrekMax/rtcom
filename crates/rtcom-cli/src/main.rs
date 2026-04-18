@@ -141,9 +141,11 @@ async fn async_main(cli: Cli) -> i32 {
     let initial_dtr = !cli.lower_dtr;
     let initial_rts = !cli.lower_rts;
 
+    // `omap` / `imap` on Cli are Options now; unspecified → `None` variant
+    // (no transformation), matching the pre-profile CLI default.
     let session = Session::new(device)
-        .with_omap(LineEndingMapper::new(cli.omap.into()))
-        .with_imap(LineEndingMapper::new(cli.imap.into()))
+        .with_omap(LineEndingMapper::new(cli.omap.unwrap_or_default().into()))
+        .with_imap(LineEndingMapper::new(cli.imap.unwrap_or_default().into()))
         .with_initial_dtr(initial_dtr)
         .with_initial_rts(initial_rts);
 
