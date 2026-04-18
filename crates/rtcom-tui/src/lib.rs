@@ -15,6 +15,7 @@ pub mod profile_bridge;
 pub mod run;
 pub mod serial_pane;
 pub mod terminal;
+pub mod toast;
 
 pub use app::TuiApp;
 pub use input::Dispatch;
