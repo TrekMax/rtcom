@@ -90,7 +90,7 @@ cargo install rtcom-cli --locked
 ```
 
 `--locked` pins the dependency versions shipped in `Cargo.lock`, which
-keeps the MSRV contract (Rust 1.86) honest.
+keeps the MSRV contract (Rust 1.88) honest.
 
 ### From source
 

@@ -136,13 +136,13 @@ impl ToastQueue {
 
     /// Number of currently-visible toasts.
     #[must_use]
-    pub fn visible_count(&self) -> usize {
+    pub const fn visible_count(&self) -> usize {
         self.toasts.len()
     }
 
     /// `true` when no toasts are currently visible.
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.toasts.is_empty()
     }
 }

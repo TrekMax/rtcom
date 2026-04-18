@@ -105,7 +105,7 @@ impl SerialPortSetupDialog {
     /// Whether the dialog will render a CLI-override hint line at the
     /// bottom (i.e. its `cli_overrides` list is non-empty).
     #[must_use]
-    pub fn has_cli_override_hint(&self) -> bool {
+    pub const fn has_cli_override_hint(&self) -> bool {
         !self.cli_overrides.is_empty()
     }
 
