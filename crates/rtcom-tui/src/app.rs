@@ -281,6 +281,19 @@ impl TuiApp {
     /// body (serial pane rendered via [`tui_term`]), 1-row bottom bar
     /// with command-key hints. The serial pane is resized to the body
     /// size every frame so it follows terminal resizes.
+    ///
+    /// When the configuration menu is open, the body is drawn according
+    /// to [`Self::current_modal_style`]:
+    ///
+    /// - [`ModalStyle::Overlay`]: serial pane drawn normally; the
+    ///   modal dialog is painted over it at its preferred size.
+    /// - [`ModalStyle::DimmedOverlay`]: serial pane drawn normally,
+    ///   then every body cell has [`Modifier::DIM`] OR-ed into its
+    ///   style so the stream fades behind the modal. The modal is then
+    ///   painted on top at full brightness.
+    /// - [`ModalStyle::Fullscreen`]: the serial pane is **not** drawn
+    ///   at all; the modal fills the entire body area. The top/bottom
+    ///   chrome bars remain visible.
     pub fn render(&mut self, f: &mut Frame<'_>) {
         let area = f.area();
         let (top, body, bottom) = main_chrome(area);
@@ -304,9 +317,25 @@ impl TuiApp {
         ]);
         f.render_widget(Paragraph::new(top_line), top);
 
-        // Body: serial pane via tui-term's PseudoTerminal widget.
-        let term_widget = PseudoTerminal::new(self.serial_pane.screen());
-        f.render_widget(term_widget, body);
+        // Body: whether to draw the live serial pane, and whether to
+        // dim it, depends on the current modal style and menu state.
+        let in_fullscreen_menu =
+            self.menu_open && self.current_modal_style == ModalStyle::Fullscreen;
+
+        if !in_fullscreen_menu {
+            // Serial pane via tui-term's PseudoTerminal widget.
+            let term_widget = PseudoTerminal::new(self.serial_pane.screen());
+            f.render_widget(term_widget, body);
+
+            // DimmedOverlay: OR DIM into every cell in the body area so
+            // the background stream fades behind the upcoming modal.
+            // `Buffer::set_style` composes by OR-ing `add_modifier` into
+            // each cell, preserving existing fg/bg/modifiers.
+            if self.menu_open && self.current_modal_style == ModalStyle::DimmedOverlay {
+                f.buffer_mut()
+                    .set_style(body, Style::default().add_modifier(Modifier::DIM));
+            }
+        }
 
         // Bottom bar: hint text.
         let bottom_line = Line::from(Span::styled(
@@ -315,10 +344,17 @@ impl TuiApp {
         ));
         f.render_widget(Paragraph::new(bottom_line), bottom);
 
-        // Modal overlay: topmost dialog drawn at its preferred size.
+        // Modal overlay: topmost dialog drawn over the (possibly
+        // dimmed, possibly skipped) body. In Fullscreen mode the
+        // modal fills the body area; otherwise it uses its preferred
+        // size (typically a centered box).
         if self.menu_open {
             if let Some(top_dialog) = self.modal_stack.top() {
-                let dialog_area = top_dialog.preferred_size(area);
+                let dialog_area = if in_fullscreen_menu {
+                    body
+                } else {
+                    top_dialog.preferred_size(area)
+                };
                 top_dialog.render(dialog_area, f.buffer_mut());
             }
         }
