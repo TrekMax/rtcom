@@ -1,0 +1,154 @@
+//! `Profile` struct and TOML-persisted sub-sections for rtcom settings.
+
+use serde::{Deserialize, Serialize};
+
+/// Top-level user profile persisted to TOML.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct Profile {
+    /// Serial-port settings (baud, framing, flow control).
+    #[serde(default)]
+    pub serial: SerialSection,
+    /// Line-ending translation (CR/LF) on input, output, and echo paths.
+    #[serde(default)]
+    pub line_endings: LineEndingsSection,
+    /// Modem control line startup policy.
+    #[serde(default)]
+    pub modem: ModemSection,
+    /// Screen / TUI rendering preferences.
+    #[serde(default)]
+    pub screen: ScreenSection,
+}
+
+/// Serial-port settings.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SerialSection {
+    /// Baud rate in bits per second (e.g. `115_200`).
+    pub baud: u32,
+    /// Number of data bits per frame (5..=8).
+    pub data_bits: u8,
+    /// Number of stop bits (1 or 2).
+    pub stop_bits: u8,
+    /// Parity: `none`, `even`, `odd`, `mark`, or `space`.
+    pub parity: String,
+    /// Flow control: `none`, `hw` (RTS/CTS), or `sw` (XON/XOFF).
+    pub flow: String,
+}
+
+impl Default for SerialSection {
+    fn default() -> Self {
+        Self {
+            baud: 115_200,
+            data_bits: 8,
+            stop_bits: 1,
+            parity: "none".into(),
+            flow: "none".into(),
+        }
+    }
+}
+
+/// Line-ending mappers.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LineEndingsSection {
+    /// Output map applied to bytes sent to the device.
+    pub omap: String,
+    /// Input map applied to bytes received from the device.
+    pub imap: String,
+    /// Echo map applied to locally-echoed bytes.
+    pub emap: String,
+}
+
+impl Default for LineEndingsSection {
+    fn default() -> Self {
+        Self {
+            omap: "none".into(),
+            imap: "none".into(),
+            emap: "none".into(),
+        }
+    }
+}
+
+/// Modem control line startup policy.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModemSection {
+    /// Initial DTR state: `unchanged`, `raise`, or `lower`.
+    pub initial_dtr: String,
+    /// Initial RTS state: `unchanged`, `raise`, or `lower`.
+    pub initial_rts: String,
+}
+
+impl Default for ModemSection {
+    fn default() -> Self {
+        Self {
+            initial_dtr: "unchanged".into(),
+            initial_rts: "unchanged".into(),
+        }
+    }
+}
+
+/// Screen / TUI rendering preferences.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScreenSection {
+    /// How modal dialogs render over the terminal stream.
+    pub modal_style: ModalStyle,
+    /// Number of scrollback rows retained in the TUI buffer.
+    pub scrollback_rows: usize,
+}
+
+impl Default for ScreenSection {
+    fn default() -> Self {
+        Self {
+            modal_style: ModalStyle::Overlay,
+            scrollback_rows: 10_000,
+        }
+    }
+}
+
+/// How modal dialogs (menus, prompts) render over the terminal stream.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ModalStyle {
+    /// Draw on top of the live stream without altering its contents.
+    #[default]
+    Overlay,
+    /// Overlay with the background stream dimmed.
+    DimmedOverlay,
+    /// Take over the full terminal while active.
+    Fullscreen,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn profile_default_values() {
+        let p = Profile::default();
+        assert_eq!(p.serial.baud, 115_200);
+        assert_eq!(p.serial.data_bits, 8);
+        assert_eq!(p.screen.modal_style, ModalStyle::Overlay);
+        assert_eq!(p.screen.scrollback_rows, 10_000);
+    }
+
+    #[test]
+    fn profile_roundtrip_toml() {
+        let original = Profile::default();
+        let serialized = toml::to_string(&original).expect("serialize");
+        let parsed: Profile = toml::from_str(&serialized).expect("parse");
+        assert_eq!(parsed, original);
+    }
+
+    #[test]
+    fn profile_unknown_keys_are_dropped() {
+        let with_unknown = r#"
+            [serial]
+            baud = 9600
+            unknown_field = "ignored"
+            data_bits = 8
+            stop_bits = 1
+            parity = "none"
+            flow = "none"
+        "#;
+        let parsed: Profile = toml::from_str(with_unknown).expect("parse");
+        assert_eq!(parsed.serial.baud, 9600);
+    }
+}

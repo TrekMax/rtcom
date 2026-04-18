@@ -27,6 +27,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 bytes = "1"
 rtcom-core = { path = "crates/rtcom-core", version = "0.1.2" }
+rtcom-config = { path = "crates/rtcom-config", version = "0.1.2" }
 
 [workspace.lints.rust]
 unsafe_code = "deny"
