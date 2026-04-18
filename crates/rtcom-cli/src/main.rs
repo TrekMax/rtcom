@@ -34,9 +34,10 @@ use std::process::ExitCode;
 use clap::Parser;
 use rtcom_config::{ModalStyle, Profile};
 use rtcom_core::{
-    LineEnding, LineEndingConfig, LineEndingMapper, ModemLineSnapshot, SerialDevice,
-    SerialPortDevice, Session, UucpLock,
+    LineEndingConfig, LineEndingMapper, ModemLineSnapshot, SerialDevice, SerialPortDevice, Session,
+    UucpLock,
 };
+use rtcom_tui::profile_bridge::{parse_line_ending, serial_config_to_section};
 use rtcom_tui::{summarise, TuiApp};
 use tracing_subscriber::EnvFilter;
 
@@ -272,46 +273,6 @@ fn load_profile(path: Option<&Path>, quiet: bool) -> Profile {
     }
 }
 
-/// Projects a runtime [`rtcom_core::SerialConfig`] back into the TOML-facing
-/// [`rtcom_config::profile::SerialSection`] used for `--save`. The
-/// inverse of the CLI's merge step: runtime enums → stable strings.
-fn serial_config_to_section(
-    cfg: &rtcom_core::SerialConfig,
-) -> rtcom_config::profile::SerialSection {
-    rtcom_config::profile::SerialSection {
-        baud: cfg.baud_rate,
-        data_bits: cfg.data_bits.bits(),
-        stop_bits: stop_bits_number(cfg.stop_bits),
-        parity: parity_word(cfg.parity).into(),
-        flow: flow_word(cfg.flow_control).into(),
-    }
-}
-
-const fn parity_word(p: rtcom_core::Parity) -> &'static str {
-    match p {
-        rtcom_core::Parity::None => "none",
-        rtcom_core::Parity::Even => "even",
-        rtcom_core::Parity::Odd => "odd",
-        rtcom_core::Parity::Mark => "mark",
-        rtcom_core::Parity::Space => "space",
-    }
-}
-
-const fn flow_word(f: rtcom_core::FlowControl) -> &'static str {
-    match f {
-        rtcom_core::FlowControl::None => "none",
-        rtcom_core::FlowControl::Hardware => "hw",
-        rtcom_core::FlowControl::Software => "sw",
-    }
-}
-
-const fn stop_bits_number(s: rtcom_core::StopBits) -> u8 {
-    match s {
-        rtcom_core::StopBits::One => 1,
-        rtcom_core::StopBits::Two => 2,
-    }
-}
-
 /// Resolve the CLI + profile line-ending mappers into a
 /// [`LineEndingConfig`] suitable for seeding [`TuiApp::set_line_endings`].
 fn resolved_line_endings(cli: &Cli, profile: &Profile) -> LineEndingConfig {
@@ -323,21 +284,7 @@ fn resolved_line_endings(cli: &Cli, profile: &Profile) -> LineEndingConfig {
         // snapshot is what the Line endings dialog opens with — pull
         // directly from the profile so the dialog reflects what
         // `--save` persists.
-        emap: line_ending_from_profile_str(&profile.line_endings.emap),
-    }
-}
-
-/// Duplicate of the `line_ending_from_profile` helper in `args.rs`.
-/// Kept small and local here; sharing would require promoting the
-/// helper to a `pub(crate) use`, which is not worth the churn for a
-/// six-line function.
-fn line_ending_from_profile_str(s: &str) -> LineEnding {
-    match s.to_ascii_lowercase().as_str() {
-        "crlf" => LineEnding::AddCrToLf,
-        "lfcr" => LineEnding::AddLfToCr,
-        "igncr" => LineEnding::DropCr,
-        "ignlf" => LineEnding::DropLf,
-        _ => LineEnding::None,
+        emap: parse_line_ending(&profile.line_endings.emap),
     }
 }
 
@@ -351,35 +298,7 @@ const fn profile_modal_style(profile: &Profile) -> ModalStyle {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rtcom_core::{DataBits, FlowControl, Parity as CoreParity, SerialConfig, StopBits};
-
-    #[test]
-    fn serial_config_to_section_round_trips_parity_and_flow() {
-        let cfg = SerialConfig {
-            baud_rate: 9600,
-            data_bits: DataBits::Seven,
-            stop_bits: StopBits::Two,
-            parity: CoreParity::Even,
-            flow_control: FlowControl::Hardware,
-            ..SerialConfig::default()
-        };
-        let section = serial_config_to_section(&cfg);
-        assert_eq!(section.baud, 9600);
-        assert_eq!(section.data_bits, 7);
-        assert_eq!(section.stop_bits, 2);
-        assert_eq!(section.parity, "even");
-        assert_eq!(section.flow, "hw");
-    }
-
-    #[test]
-    fn line_ending_from_profile_str_parses_all_known_forms() {
-        assert_eq!(line_ending_from_profile_str("crlf"), LineEnding::AddCrToLf);
-        assert_eq!(line_ending_from_profile_str("lfcr"), LineEnding::AddLfToCr);
-        assert_eq!(line_ending_from_profile_str("igncr"), LineEnding::DropCr);
-        assert_eq!(line_ending_from_profile_str("ignlf"), LineEnding::DropLf);
-        assert_eq!(line_ending_from_profile_str("none"), LineEnding::None);
-        assert_eq!(line_ending_from_profile_str("bogus"), LineEnding::None);
-    }
+    use rtcom_core::LineEnding;
 
     #[test]
     fn profile_modal_style_picks_up_screen_section() {

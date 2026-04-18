@@ -11,6 +11,7 @@ pub mod input;
 pub mod layout;
 pub mod menu;
 pub mod modal;
+pub mod profile_bridge;
 pub mod run;
 pub mod serial_pane;
 pub mod terminal;
