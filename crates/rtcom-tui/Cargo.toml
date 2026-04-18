@@ -1,0 +1,24 @@
+[package]
+name = "rtcom-tui"
+description = "Terminal UI for rtcom"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+rtcom-core = { workspace = true }
+
+crossterm = { workspace = true }
+ratatui = { workspace = true }
+vt100 = { workspace = true }
+tui-term = { workspace = true }
+
+tokio = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }

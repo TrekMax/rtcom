@@ -19,6 +19,9 @@ nix = { version = "0.29", default-features = false, features = ["signal"] }
 tempfile = "3"
 clap = { version = "4.5", features = ["derive", "env"] }
 crossterm = "0.27"
+ratatui = "0.28"
+vt100 = "0.15"
+tui-term = "0.1"
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
 thiserror = "1"
@@ -29,6 +32,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 bytes = "1"
 rtcom-core = { path = "crates/rtcom-core", version = "0.1.2" }
 rtcom-config = { path = "crates/rtcom-config", version = "0.1.2" }
+rtcom-tui = { path = "crates/rtcom-tui", version = "0.1.2" }
 
 [workspace.lints.rust]
 unsafe_code = "deny"
