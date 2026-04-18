@@ -20,7 +20,10 @@
 //! on these helpers, which is why they live in the shared `rtcom-tui`
 //! crate.
 
-use rtcom_config::{profile::SerialSection, Profile};
+use rtcom_config::{
+    profile::{LineEndingsSection, SerialSection},
+    Profile,
+};
 use rtcom_core::{
     DataBits, FlowControl, LineEnding, LineEndingConfig, Parity, SerialConfig, StopBits,
     DEFAULT_READ_TIMEOUT,
@@ -65,6 +68,31 @@ pub fn line_endings_from_profile(p: &Profile) -> LineEndingConfig {
         omap: parse_line_ending(&p.line_endings.omap),
         imap: parse_line_ending(&p.line_endings.imap),
         emap: parse_line_ending(&p.line_endings.emap),
+    }
+}
+
+/// Project a runtime [`LineEndingConfig`] into its TOML-facing
+/// [`LineEndingsSection`] representation (used when persisting on
+/// `DialogAction::ApplyLineEndingsAndSave`).
+///
+/// The emitted strings round-trip through [`parse_line_ending`] — the
+/// vocabulary is `"none"`, `"crlf"`, `"lfcr"`, `"igncr"`, `"ignlf"`.
+#[must_use]
+pub fn line_ending_config_to_section(c: &LineEndingConfig) -> LineEndingsSection {
+    LineEndingsSection {
+        omap: line_ending_word(c.omap).into(),
+        imap: line_ending_word(c.imap).into(),
+        emap: line_ending_word(c.emap).into(),
+    }
+}
+
+const fn line_ending_word(le: LineEnding) -> &'static str {
+    match le {
+        LineEnding::None => "none",
+        LineEnding::AddCrToLf => "crlf",
+        LineEnding::AddLfToCr => "lfcr",
+        LineEnding::DropCr => "igncr",
+        LineEnding::DropLf => "ignlf",
     }
 }
 
@@ -232,6 +260,36 @@ mod tests {
         assert_eq!(parse_line_ending("ignlf"), LineEnding::DropLf);
         assert_eq!(parse_line_ending("none"), LineEnding::None);
         assert_eq!(parse_line_ending("bogus"), LineEnding::None);
+    }
+
+    #[test]
+    fn line_ending_config_to_section_round_trips() {
+        let original = LineEndingConfig {
+            omap: LineEnding::AddCrToLf,
+            imap: LineEnding::DropLf,
+            emap: LineEnding::None,
+        };
+        let section = line_ending_config_to_section(&original);
+        let back = line_endings_from_profile(&Profile {
+            line_endings: section,
+            ..Profile::default()
+        });
+        assert_eq!(back.omap, LineEnding::AddCrToLf);
+        assert_eq!(back.imap, LineEnding::DropLf);
+        assert_eq!(back.emap, LineEnding::None);
+    }
+
+    #[test]
+    fn line_ending_config_to_section_emits_known_vocabulary() {
+        let cfg = LineEndingConfig {
+            omap: LineEnding::AddCrToLf,
+            imap: LineEnding::AddLfToCr,
+            emap: LineEnding::DropCr,
+        };
+        let section = line_ending_config_to_section(&cfg);
+        assert_eq!(section.omap, "crlf");
+        assert_eq!(section.imap, "lfcr");
+        assert_eq!(section.emap, "igncr");
     }
 
     #[test]

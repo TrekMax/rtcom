@@ -39,7 +39,8 @@ use crate::{
     input::Dispatch,
     modal::DialogAction,
     profile_bridge::{
-        line_endings_from_profile, serial_config_to_section, serial_section_to_config,
+        line_ending_config_to_section, line_endings_from_profile, serial_config_to_section,
+        serial_section_to_config,
     },
     terminal::{AltScreenGuard, RawModeGuard},
     toast::ToastLevel,
@@ -240,11 +241,23 @@ fn apply_dialog_action(
     }
 
     match action {
-        DialogAction::ApplyLineEndingsLive(_) | DialogAction::ApplyLineEndingsAndSave(_) => {
+        DialogAction::ApplyLineEndingsLive(_) => {
             // v0.2.1 ships the Arc<Mutex<Mapper>> refactor that lets
-            // the session swap mappers at runtime. Until then, line-
-            // ending changes require a restart.
+            // the session swap mappers at runtime. Until then, live
+            // line-ending changes require a restart.
             tracing::warn!("live line-ending change not yet supported; restart rtcom to apply");
+        }
+        DialogAction::ApplyLineEndingsAndSave(le) => {
+            // The *live* runtime swap still requires the v0.2.1 mapper
+            // refactor, but persisting to the profile is cheap — do it
+            // now so the next rtcom launch picks up the new vocabulary
+            // via the existing profile-load path.
+            tracing::info!(
+                "line endings saved to profile; restart rtcom to apply to the live session"
+            );
+            profile.line_endings = line_ending_config_to_section(le);
+            app.set_line_endings(*le);
+            persist_profile(profile, profile_path, bus);
         }
         DialogAction::ApplyAndSave(cfg) => {
             // Two-step: apply live, then persist the new serial section.
@@ -892,6 +905,78 @@ mod tests {
             crate::toast::ToastLevel::Error
         );
         assert!(app.toasts_mut().visible()[0].message.contains("boom"));
+    }
+
+    #[tokio::test]
+    async fn apply_line_endings_and_save_persists_profile() {
+        use rtcom_core::{LineEnding, LineEndingConfig};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("le.toml");
+        let bus = EventBus::new(64);
+        let mut rx = bus.subscribe();
+        let mut app = TuiApp::new(bus.clone());
+        let mut profile = Profile::default();
+
+        let le = LineEndingConfig {
+            omap: LineEnding::AddCrToLf,
+            imap: LineEnding::None,
+            emap: LineEnding::None,
+        };
+        apply_dialog_action(
+            &DialogAction::ApplyLineEndingsAndSave(le),
+            &mut app,
+            &bus,
+            Some(&path),
+            &mut profile,
+        );
+
+        // In-memory profile updated with the round-trip vocabulary.
+        assert_eq!(profile.line_endings.omap, "crlf");
+        // File persisted to disk.
+        let on_disk = rtcom_config::read(&path).unwrap();
+        assert_eq!(on_disk.line_endings.omap, "crlf");
+        // ProfileSaved event emitted so the toast layer can surface it.
+        let mut saw_saved = false;
+        while let Ok(ev) = rx.try_recv() {
+            if matches!(ev, Event::ProfileSaved { .. }) {
+                saw_saved = true;
+            }
+        }
+        assert!(saw_saved, "expected ProfileSaved event");
+    }
+
+    #[tokio::test]
+    async fn apply_line_endings_live_still_warns_and_does_not_persist() {
+        use rtcom_core::{LineEnding, LineEndingConfig};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("le_live.toml");
+        let bus = EventBus::new(64);
+        let mut rx = bus.subscribe();
+        let mut app = TuiApp::new(bus.clone());
+        let mut profile = Profile::default();
+
+        let le = LineEndingConfig {
+            omap: LineEnding::AddCrToLf,
+            imap: LineEnding::None,
+            emap: LineEnding::None,
+        };
+        apply_dialog_action(
+            &DialogAction::ApplyLineEndingsLive(le),
+            &mut app,
+            &bus,
+            Some(&path),
+            &mut profile,
+        );
+
+        // Profile in memory untouched (default "none") and no file
+        // written to disk.
+        assert_eq!(profile.line_endings.omap, "none");
+        assert!(!path.exists(), "live-only path must not write profile");
+        // No bus events.
+        assert!(matches!(
+            rx.try_recv(),
+            Err(broadcast::error::TryRecvError::Empty)
+        ));
     }
 
     #[tokio::test]
