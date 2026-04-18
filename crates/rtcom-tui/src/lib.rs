@@ -7,6 +7,7 @@
 #![forbid(unsafe_code)]
 
 pub mod app;
+pub mod layout;
 pub mod serial_pane;
 pub mod terminal;
 
