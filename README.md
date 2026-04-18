@@ -12,6 +12,32 @@ native Windows backend, a first-class library API, and a pluggable
 architecture for future protocol decoding, scripting, and network
 sharing.
 
+## What's new in v0.2 (Preview)
+
+rtcom v0.2 switches from the v0.1 line-based stdout renderer to a full
+[ratatui](https://github.com/ratatui-org/ratatui)-backed TUI:
+
+- **Configuration menu** at `^A m` — minicom-style dialog tree for serial
+  settings, line-endings, modem lines, profile save/load, and screen
+  options.
+- **Profile persistence** via `~/.config/rtcom/default.toml`
+  (XDG standard). `rtcom -c <path>` to override; `rtcom ... --save` to
+  write the effective configuration on startup.
+- **Apply live vs. save** — every configuration dialog distinguishes
+  `F2` (apply to the live session) from `F10` (apply + persist to profile),
+  matching the minicom UX.
+- **Proper VT100 emulation** in the serial pane — remote apps that use
+  cursor positioning (ncurses UIs, Zephyr shell, etc.) render correctly.
+
+<!-- TODO: add screenshot of the menu / serial pane -->
+
+**Breaking change**: v0.2 requires a proper TTY. Piping `rtcom` output
+through a non-TTY consumer (`rtcom /dev/ttyUSB0 | grep ...`) no longer
+works. Use `tio`'s capture feature or `rtcom --log` (planned for v0.3)
+instead.
+
+See [`docs/tui.md`](./docs/tui.md) for the full keybinding reference.
+
 ## Features (v0.1)
 
 - Async serial I/O built on `tokio-serial` (Linux / macOS / BSD).
@@ -44,9 +70,16 @@ rtcom /dev/ttyUSB0
 # Change baud + parity + enable LF->CRLF on send
 rtcom /dev/ttyUSB0 -b 9600 -p even --omap crlf
 
+# Load a custom profile and persist CLI overrides back to it
+rtcom /dev/ttyUSB0 -b 921600 -c ~/.config/rtcom/board-x.toml --save
+
 # Print the full option list
 rtcom --help
 ```
+
+Press `^A m` to open the configuration menu, `^A ^Q` (or `^A ^X`) to
+quit. See [`docs/tui.md`](./docs/tui.md) for the full keybinding
+reference.
 
 ## Installation
 
@@ -103,6 +136,7 @@ silently return to default mode.
 
 | Key | Action |
 |-----|--------|
+| `m` | Open the configuration menu (v0.2) |
 | `?` or `h` | Print the command-key cheatsheet |
 | `^Q` or `^X` | Quit the session cleanly (Ctrl-Q / Ctrl-X) |
 | `c` | Show current serial configuration |
@@ -112,6 +146,22 @@ silently return to default mode.
 | `b<rate><Enter>` | Change baud rate (e.g. `^A b 115200 <Enter>`) |
 | The escape key again | Send the escape byte verbatim to the wire |
 | `Esc` | Cancel command mode, return to default |
+
+### Menu navigation (v0.2)
+
+Inside a dialog opened via `^A m`:
+
+| Keystroke | Action |
+|-----------|--------|
+| `↑` / `↓` / `j` / `k` | Move cursor |
+| `Enter` | Activate / edit / confirm |
+| `Space` | Cycle enum values |
+| `+` / `-` | Step through common baud rates |
+| `F2` | Apply pending changes to the live session |
+| `F10` | Apply + save to the profile TOML |
+| `Esc` | Cancel / close dialog |
+
+See [`docs/tui.md`](./docs/tui.md) for the full TUI reference.
 
 ## vs. picocom / tio
 
@@ -133,8 +183,10 @@ silently return to default mode.
 
 | Crate | Role |
 |---|---|
-| `rtcom-core` | Serial device trait, event bus, session orchestrator, mappers, UUCP lock (library) |
-| `rtcom-cli`  | `rtcom` binary: argument parsing, TTY setup, signal handling, main loop |
+| `rtcom-core`   | Serial device trait, event bus, session orchestrator, mappers, UUCP lock (library) |
+| `rtcom-config` | Profile TOML (serde) + XDG / platform-native path resolution |
+| `rtcom-tui`    | ratatui-backed UI: serial pane (vt100), menu, dialogs, toasts |
+| `rtcom-cli`    | `rtcom` binary: argument parsing, TTY setup, signal handling, main loop |
 
 ## Architecture
 

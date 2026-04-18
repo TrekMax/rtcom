@@ -2,7 +2,7 @@
 .\" Keep this file in sync with Cli (crates/rtcom-cli/src/args.rs) and
 .\" CommandKeyParser (crates/rtcom-core/src/command.rs). The CI
 .\" will not catch divergence; reviewers please compare.
-.TH RTCOM 1 "2026-04-17" "rtcom 0.1.0" "User Commands"
+.TH RTCOM 1 "2026-04-18" "rtcom 0.2.0" "User Commands"
 .
 .SH NAME
 rtcom \- Rust Terminal Communication, a modern serial terminal
@@ -21,23 +21,38 @@ opens
 .IR /dev/ttyACM0 ,
 or
 .IR COM3
-on Windows) as a serial port and bridges it to the terminal. Bytes
-typed on stdin are sent to the device; bytes received from the device
-are written to stdout. An interactive command-key prefix
+on Windows) as a serial port and bridges it to a full-screen
+terminal UI. Bytes typed on the keyboard are sent to the device; bytes
+received from the device are rendered into a VT100 emulator pane. An
+interactive command-key prefix
 .RB ( ^A
 = Ctrl-A by default; override with
 .BR \-\-escape )
-gives access to runtime controls without leaving the session.
+gives access to runtime controls including the configuration menu
+.RB ( "^A m" )
+without leaving the session.
 .PP
-The program enables terminal raw mode when stdin is a TTY and
-restores it on every exit path (clean exit, panic, SIGINT / SIGTERM /
-SIGHUP). A UUCP-style lock file in
+The program takes over the terminal (raw mode + alternate screen)
+and restores it on every exit path (clean exit, panic, SIGINT /
+SIGTERM / SIGHUP). A UUCP-style lock file in
 .I /var/lock
 (falling back to
 .IR /tmp )
 prevents two
 .B rtcom
 instances from racing the same device.
+.PP
+.B rtcom
+persists user configuration to a TOML profile (see
+.BR FILES ).
+The profile is optional — rtcom starts from built-in defaults when
+the file is absent and only writes to disk when you save from the
+menu or pass
+.BR \-\-save .
+.PP
+.B Note:
+since v0.2 rtcom requires a real TTY on stdin and stdout. Non-TTY
+pipelines (`rtcom /dev/ttyUSB0 | grep ...`) are not supported.
 .
 .SH OPTIONS
 .TP
@@ -121,6 +136,22 @@ caret notation
 on hosts where tmux's prefix is bound to it or the terminal
 emulator binds Ctrl-T to "new tab".
 .TP
+.BR \-c ", " \-\-config " " \fIPATH\fR
+Path to the profile TOML file. When omitted, rtcom uses the platform
+default location (see
+.B FILES
+below). Missing files are not an error; rtcom starts from built-in
+defaults and writes the file only when you save from the menu or pass
+.BR \-\-save .
+.TP
+.B \-\-save
+Write the effective configuration back to the profile on startup.
+Merges CLI-provided fields over the loaded profile, then persists the
+result before starting the session. Fails hard when no profile path
+is available (no
+.BR \-c " " \fIPATH\fR
+and no discoverable home directory).
+.TP
 .BR \-q ", " \-\-quiet
 Suppress the startup configuration banner on stderr.
 .TP
@@ -145,6 +176,11 @@ After typing the escape key
 by default; the startup banner echoes the configured one), the next
 byte is matched against this table. Unknown keys silently return to
 normal mode.
+.TP
+.B m
+Open the configuration menu. See
+.B MENU
+below.
 .TP
 .BR ? " | " h
 Print the command-key cheatsheet as a system message (prefixed
@@ -189,6 +225,51 @@ escape key collides with a byte the remote expects.
 .B Esc
 Cancel command mode without doing anything.
 .
+.SH MENU
+Pressing the escape key followed by
+.B m
+opens a minicom-style configuration menu over the serial pane. The
+top-level menu lists:
+.B "Serial port setup" ,
+.B "Line endings" ,
+.B "Modem control" ,
+.B "Profile (save / load)" ,
+and
+.BR "Screen options" .
+.PP
+Inside a dialog:
+.TP
+.BR \(ua " | " \(da " | " j " | " k
+Move cursor up / down.
+.TP
+.B Enter
+Activate an entry, edit a value, or confirm.
+.TP
+.B Space
+Cycle enum values (e.g. parity none / even / odd / mark / space).
+.TP
+.BR + " | " -
+Step through common baud rates (1200, 2400, ..., 3000000).
+.TP
+.B F2
+Apply pending changes to the live session without touching the
+profile on disk.
+.TP
+.B F10
+Apply pending changes
+.I and
+persist them to the profile TOML.
+.TP
+.B Esc
+Cancel the dialog and return to the parent menu or the serial pane.
+.PP
+Profile I/O uses the path selected by
+.BR \-c " " \fIPATH\fR
+or, when omitted, the platform default (see
+.BR FILES ).
+Toast notifications at the bottom-right of the serial pane confirm
+successful saves / loads or report errors.
+.
 .SH EXIT STATUS
 .TP
 .B 0
@@ -210,8 +291,8 @@ SIGHUP -> 129, SIGINT -> 130, SIGTERM -> 143. The RAII drop chain
 .
 .SH SIGNALS
 SIGINT, SIGTERM, and SIGHUP trip the session's cancellation token
-and unwind cleanly. SIGWINCH is logged at debug level (the v1.0+ TUI
-will react). On Windows, Ctrl-C and Ctrl-Break are the equivalents.
+and unwind cleanly. SIGWINCH drives TUI re-layout. On Windows,
+Ctrl-C and Ctrl-Break are the equivalents of SIGINT / SIGTERM.
 .
 .SH ENVIRONMENT
 .TP
@@ -236,6 +317,18 @@ is not writable (user not in group
 minimal container, etc.). Content is a 10-character ASCII PID plus
 newline. Stale locks (PIDs that no longer exist) are transparently
 replaced.
+.TP
+.I $XDG_CONFIG_HOME/rtcom/default.toml
+Default profile path on Linux / BSD (falls back to
+.IR ~/.config/rtcom/default.toml ). On macOS the path is
+.IR ~/Library/Application\ Support/rtcom/default.toml ;
+on Windows,
+.IR %APPDATA%\\rtcom\\default.toml .
+Override with
+.BR \-c " " \fIPATH\fR .
+Missing files are not an error — rtcom uses built-in defaults and
+creates the file when you save from the menu or pass
+.BR \-\-save .
 .
 .SH EXAMPLES
 .TP
@@ -254,9 +347,14 @@ to keep an Arduino-style MCU from rebooting on open:
 .
 .SH SEE ALSO
 .BR picocom (1),
+.BR minicom (1),
 .BR tio (1),
 .BR socat (1),
-.BR stty (1)
+.BR stty (1).
+.PP
+The TUI reference lives at
+.I docs/tui.md
+in the rtcom source tree.
 .
 .SH AUTHOR
 TrekMax and contributors. See the project at

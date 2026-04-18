@@ -7,6 +7,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Full-screen ratatui TUI with three modal styles (overlay / dimmed /
+  fullscreen). See [`docs/tui.md`](./docs/tui.md).
+- `^A m` opens a minicom-style configuration menu covering serial port
+  setup, line endings, modem lines, profile save/load, and screen
+  options.
+- Profile persistence via `~/.config/rtcom/default.toml` (XDG standard,
+  platform-native equivalents on macOS / Windows).
+- `-c PATH` / `--config PATH` to override the profile location.
+- `--save` writes the effective startup configuration to the profile.
+- `Event::MenuOpened` / `Event::MenuClosed` / `Event::ProfileSaved` /
+  `Event::ProfileLoadFailed` / `Event::ModemLinesChanged` for
+  subscribers (log capture, scripts).
+- `Session::apply_config` applies a full `SerialConfig` atomically with
+  rollback on partial failure.
+- Toast notifications for profile IO + errors (3-second auto-dismiss).
+- `LineEndingConfig`, `ModemLineSnapshot`, `ModalStyle` public types
+  for downstream consumers.
+- Snapshot-tested UI at 80×24 and 120×40 for regression safety.
+- Two new crates: `rtcom-config` (profile persistence) and `rtcom-tui`
+  (ratatui UI layer).
+- New ADRs: [`008-ratatui-tui`](./docs/adr/008-ratatui-tui.md),
+  [`009-vt100-emulator`](./docs/adr/009-vt100-emulator.md),
+  [`010-directories-xdg`](./docs/adr/010-directories-xdg.md).
+
+### Changed
+
+- **BREAKING**: rtcom now requires a real TTY on stdin/stdout; piping
+  through a non-TTY process no longer works.
+- **BREAKING**: the v0.1 stdout line-by-line renderer is removed.
+- `rtcom-cli` no longer owns the terminal lifecycle — delegated to
+  `rtcom-tui`.
+- `crossterm` bumped from 0.27 to 0.28 (ratatui transitive unification).
+- Bottom-bar label corrected from `^A q quit` to `^A ^Q quit` — the
+  actual binding is Ctrl-Q (or Ctrl-X), not the plain letter `q`.
+
+### Deprecated
+
+- None for this release. A future v0.2.1 may add a `^A q` alias so
+  typing the plain letter works too; the current fix is label-only.
+
+### Fixed
+
+- Partial section parsing in profile files now falls back to section
+  defaults instead of erroring out.
+
+### Deferred to v0.2.1 / later
+
+- Live line-ending changes (currently requires restart).
+- Real-time modem status display (CTS/DSR/RI/CD polling).
+- Mouse selection + copy in the serial pane.
+- Multi-named-profile support (`--profile <name>`).
+
 ## [0.1.2] — 2026-04-17
 
 ### Added

@@ -258,17 +258,35 @@ rtcom/
 │   │       ├── command.rs          # Command 枚举与状态机
 │   │       ├── config.rs           # SerialConfig 等核心类型
 │   │       └── error.rs
+│   ├── rtcom-config/               # Profile TOML + XDG 路径(v0.2 起实装)
+│   │   ├── Cargo.toml
+│   │   └── src/
+│   │       ├── lib.rs              # read/write + Error
+│   │       ├── profile.rs          # Profile / SerialSection / ... / ModalStyle
+│   │       └── paths.rs            # default_profile_path via `directories`
+│   ├── rtcom-tui/                  # ratatui UI 层(v0.2 起实装)
+│   │   ├── Cargo.toml
+│   │   └── src/
+│   │       ├── lib.rs
+│   │       ├── app.rs              # TuiApp 主 widget + 渲染
+│   │       ├── run.rs              # 事件循环 / Session 桥接
+│   │       ├── terminal.rs         # RAII guard(raw mode + alt screen)
+│   │       ├── serial_pane.rs      # vt100 + tui-term 封装
+│   │       ├── modal.rs            # 模态栈 + ModalStyle
+│   │       ├── menu/               # 各 dialog(serial / line endings / ...)
+│   │       ├── toast.rs            # ToastQueue
+│   │       ├── input.rs            # 键盘到 DialogAction / Command
+│   │       ├── layout.rs           # top/body/bottom 三带布局
+│   │       └── profile_bridge.rs   # Profile ↔ SerialConfig 转接
 │   ├── rtcom-cli/                  # CLI 二进制
 │   │   ├── Cargo.toml
 │   │   └── src/
 │   │       ├── main.rs
-│   │       ├── args.rs             # clap derive
-│   │       ├── signal.rs           # SIGINT/TERM/WINCH 处理
-│   │       └── tty.rs              # raw 模式 guard
-│   ├── rtcom-config/               # Profile + TOML
-│   ├── rtcom-log/                  # 日志文件写入、ANSI 剥离
-│   ├── rtcom-xfer/                 # xmodem/ymodem(v0.6)
-│   └── rtcom-script/               # Lua(v0.5,feature gate)
+│   │       ├── args.rs             # clap derive(含 -c / --save)
+│   │       └── signal.rs           # SIGINT/TERM/WINCH 处理
+│   ├── rtcom-log/                  # 日志文件写入、ANSI 剥离(v0.3 计划)
+│   ├── rtcom-xfer/                 # xmodem/ymodem(v0.7)
+│   └── rtcom-script/               # Lua(v0.6,feature gate)
 ├── tests/                          # 端到端测试(socat 造 PTY)
 │   ├── e2e_basic.rs
 │   └── e2e_commands.rs
@@ -342,17 +360,24 @@ strip = true
 
 ## 6. 版本路线图
 
-| 版本 | 主题 | 关键交付 |
-|---|---|---|
-| **v0.1** | MVP 可用版 | 基础串口交互,替代 picocom |
-| **v0.2** | 日志与显示 | 时间戳 / hex / 彩色 / 日志文件 |
-| **v0.3** | 设备管理 | `-L` 列表 / 热插拔 / 等待设备 |
-| **v0.4** | 配置与 Profile | TOML 配置 / 命名 profile |
-| **v0.5** | 脚本自动化 | Lua 脚本 / 触发器 |
-| **v0.6** | 文件传输 | 内置 xmodem / ymodem |
-| **v0.7** | 网络与多会话 | TCP/Unix socket 共享 |
-| **v0.8** | Windows 原生 | 跨平台完整 |
-| **v1.0** | 稳定版 | 文档完善 / 性能基线 |
+| 版本  | 主题                          | 关键交付                                              |
+| ----- | ----------------------------- | ----------------------------------------------------- |
+| v0.1  | MVP 可用版                    | 基础串口交互,替代 picocom                            |
+| **v0.2** | **TUI + 菜单 + 基础 profile** | **ratatui 全屏 UI,`^A m` 配置菜单,XDG profile** |
+| v0.3  | 日志与显示                    | 时间戳 / hex / 彩色 / 日志文件(基于 v0.2 TUI)       |
+| v0.4  | 设备管理                      | `-L` 列表 / 热插拔 / 等待设备                         |
+| v0.5  | 命名 Profile                  | 多 profile / `--profile <name>` CLI                   |
+| v0.6  | 脚本自动化                    | Lua 脚本 / 触发器                                     |
+| v0.7  | 文件传输                      | 内置 xmodem / ymodem                                  |
+| v0.8  | 网络与多会话                  | TCP/Unix socket 共享                                  |
+| v0.9  | Windows 原生                  | 跨平台完整                                            |
+| v1.0  | 稳定版                        | 文档完善 / 性能基线                                   |
+
+**右移说明**:v0.2 原计划为"日志与显示"。v0.2 重新设计后把 TUI + 菜单
+提前为必要基建,后续日志 UI(pane / hex 切换 / 过滤输入)可直接在 TUI
+层实现,而不必在 stdout 和 TUI 两层都做一遍。v0.3 及其后的主题依次右移
+一格。完整背景见
+[`docs/plans/2026-04-18-tui-menu-design.md`](./docs/plans/2026-04-18-tui-menu-design.md)。
 
 详细功能清单见本文档首次输出的"功能规划"章节,已内化为上表。每个版本一个 GitHub Milestone,每条功能一个 issue。
 
