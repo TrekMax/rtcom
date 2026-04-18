@@ -7,6 +7,8 @@
 #![forbid(unsafe_code)]
 
 pub mod app;
+pub mod serial_pane;
 pub mod terminal;
 
 pub use app::TuiApp;
+pub use serial_pane::SerialPane;
