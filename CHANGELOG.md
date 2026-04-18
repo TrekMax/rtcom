@@ -34,6 +34,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - New ADRs: [`008-ratatui-tui`](./docs/adr/008-ratatui-tui.md),
   [`009-vt100-emulator`](./docs/adr/009-vt100-emulator.md),
   [`010-directories-xdg`](./docs/adr/010-directories-xdg.md).
+- Scrollback navigation in the serial pane via `Shift+PageUp/Down`,
+  `Shift+Up/Down`, `Shift+Home/End`, and the mouse wheel. Top bar
+  shows `[SCROLL ↑N]` (yellow) when the view is above the live tail.
+- New profile key `[screen].wheel_scroll_lines` (default `3`) tunes
+  the mouse wheel scroll speed. Hand-edit the TOML to change; a
+  menu-editable control lands in v0.2.1.
 
 ### Changed
 
@@ -73,7 +79,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Live line-ending changes (currently requires restart).
 - Real-time modem status display (CTS/DSR/RI/CD polling).
-- Mouse selection + copy in the serial pane.
+- Mouse-driven text selection + copy in the serial pane. For v0.2,
+  hold `Shift` while clicking and dragging — most terminal emulators
+  treat `Shift+drag` as a bypass of rtcom's mouse capture, letting
+  the terminal's native selection + copy work.
+- Menu-editable `[screen].wheel_scroll_lines` (hand-edit TOML for now).
 - Multi-named-profile support (`--profile <name>`).
 
 ## [0.1.2] — 2026-04-17

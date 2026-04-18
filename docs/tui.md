@@ -13,8 +13,9 @@ The main screen has three horizontal bands:
 1. **Top bar** — rtcom version, device path, and current serial config
    (baud, framing, flow control).
 2. **Serial pane** — a VT100 emulator that renders bytes received from
-   the device. Supports ANSI styling, cursor positioning, and will host
-   scrollback + copy/paste in a future release.
+   the device. Supports ANSI styling, cursor positioning, and a
+   10,000-row scrollback buffer (see [Scrollback and
+   selection](#scrollback-and-selection)).
 3. **Bottom bar** — quick-key hints (`^A m menu · ^A ? help · ^A ^Q quit`).
 
 ## Keyboard shortcuts
@@ -62,6 +63,50 @@ The screen-options dialog (within `^A m`) toggles how overlays render:
 | `fullscreen`       | Modal fills the body; background pane is hidden        |
 
 The choice persists to the profile's `[screen].modal_style` key.
+
+## Scrollback and selection
+
+The serial pane keeps a 10,000-row scrollback buffer. Navigate with:
+
+### Keyboard
+
+| Keystroke           | Action                               |
+| ------------------- | ------------------------------------ |
+| `Shift+PageUp`      | Scroll up half a screen              |
+| `Shift+PageDown`    | Scroll down half a screen            |
+| `Shift+Up`          | Scroll up one line                   |
+| `Shift+Down`        | Scroll down one line                 |
+| `Shift+Home`        | Jump to oldest row                   |
+| `Shift+End`         | Jump back to live tail               |
+
+### Mouse
+
+The mouse wheel scrolls the serial pane — 3 lines per notch by
+default. Override via `[screen].wheel_scroll_lines` in the profile
+(hand-edit the TOML; a menu-editable control lands in v0.2.1).
+Values less than 1 are clamped to 1 at runtime, so the wheel
+always moves at least one line.
+
+### Top-bar indicator
+
+When the view is above the live tail, the top bar shows
+`[SCROLL ↑N]` (yellow) with N lines above live. New data keeps
+streaming into the buffer, but the view does not follow until you
+`Shift+End` (or scroll back down past the bottom).
+
+### Selection and copy
+
+Native mouse-driven text selection + copy lands in v0.2.1. For
+v0.2:
+
+- **To copy visible text**: hold `Shift` while clicking and
+  dragging. Most terminals (xterm, gnome-terminal, iterm2, kitty,
+  alacritty, `Windows Terminal`) treat `Shift+drag` as a bypass of
+  rtcom's mouse capture, letting the terminal's native selection +
+  copy work.
+- **To copy older scrollback content**: not yet supported
+  directly. Scroll up with `Shift+PageUp` first to bring the
+  target lines on-screen, then `Shift+drag` once they are visible.
 
 ## Line endings recipes
 
