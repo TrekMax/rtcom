@@ -121,6 +121,7 @@ impl TuiApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Dispatch;
     use ratatui::{backend::TestBackend, Terminal};
     use rtcom_core::EventBus;
 
@@ -155,5 +156,65 @@ mod tests {
         app.serial_pane_mut().ingest(b"boot: starting...\r\nok\r\n");
         let terminal = render_app(&mut app, 80, 24);
         insta::assert_snapshot!(terminal.backend());
+    }
+
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    fn key(code: KeyCode, mods: KeyModifiers) -> KeyEvent {
+        KeyEvent::new(code, mods)
+    }
+
+    #[test]
+    fn key_passthrough_when_menu_closed() {
+        let bus = EventBus::new(64);
+        let mut app = TuiApp::new(bus);
+        let out = app.handle_key(key(KeyCode::Char('h'), KeyModifiers::NONE));
+        assert!(matches!(out, Dispatch::TxBytes(ref b) if b == b"h"));
+    }
+
+    #[test]
+    fn ctrl_a_then_m_opens_menu() {
+        let bus = EventBus::new(64);
+        let mut app = TuiApp::new(bus);
+        let step1 = app.handle_key(key(KeyCode::Char('a'), KeyModifiers::CONTROL));
+        assert!(matches!(step1, Dispatch::Noop));
+        let step2 = app.handle_key(key(KeyCode::Char('m'), KeyModifiers::NONE));
+        assert!(matches!(step2, Dispatch::OpenedMenu));
+        assert!(app.is_menu_open());
+    }
+
+    #[test]
+    fn ctrl_q_requests_quit() {
+        let bus = EventBus::new(64);
+        let mut app = TuiApp::new(bus);
+        // Bytes: ^A then ^Q
+        let _ = app.handle_key(key(KeyCode::Char('a'), KeyModifiers::CONTROL));
+        let out = app.handle_key(key(KeyCode::Char('q'), KeyModifiers::CONTROL));
+        assert!(matches!(out, Dispatch::Quit));
+    }
+
+    #[test]
+    fn second_ctrl_a_m_closes_menu() {
+        let bus = EventBus::new(64);
+        let mut app = TuiApp::new(bus);
+        // open
+        let _ = app.handle_key(key(KeyCode::Char('a'), KeyModifiers::CONTROL));
+        let _ = app.handle_key(key(KeyCode::Char('m'), KeyModifiers::NONE));
+        assert!(app.is_menu_open());
+        // close — menu-open input handling isn't wired yet (T10+),
+        // so T9 only needs to accept the input and return Noop when
+        // menu is open. We'll wire actual closing in T11.
+        let out = app.handle_key(key(KeyCode::Char('m'), KeyModifiers::NONE));
+        assert!(matches!(out, Dispatch::Noop));
+        // Menu still open until T11+ wires the ModalStack.
+        assert!(app.is_menu_open());
+    }
+
+    #[test]
+    fn enter_emits_cr_byte() {
+        let bus = EventBus::new(64);
+        let mut app = TuiApp::new(bus);
+        let out = app.handle_key(key(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(matches!(out, Dispatch::TxBytes(ref b) if b == b"\r"));
     }
 }

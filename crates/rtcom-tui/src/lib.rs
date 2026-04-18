@@ -7,9 +7,11 @@
 #![forbid(unsafe_code)]
 
 pub mod app;
+pub mod input;
 pub mod layout;
 pub mod serial_pane;
 pub mod terminal;
 
 pub use app::TuiApp;
+pub use input::Dispatch;
 pub use serial_pane::SerialPane;
