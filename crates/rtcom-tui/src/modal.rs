@@ -5,7 +5,7 @@
 use crossterm::event::KeyEvent;
 use ratatui::{buffer::Buffer, layout::Rect};
 
-use rtcom_core::SerialConfig;
+use rtcom_core::{LineEndingConfig, SerialConfig};
 
 /// What a [`Dialog`] wants the surrounding [`ModalStack`] to do after
 /// it has processed an input event.
@@ -44,6 +44,12 @@ pub enum DialogAction {
     /// Apply `SerialConfig` to the live session *and* persist to
     /// profile (F10 path).
     ApplyAndSave(SerialConfig),
+    /// Apply the given [`LineEndingConfig`] to the live session
+    /// immediately (F2 path).
+    ApplyLineEndingsLive(LineEndingConfig),
+    /// Apply [`LineEndingConfig`] to the live session *and* persist
+    /// it to profile (F10 path).
+    ApplyLineEndingsAndSave(LineEndingConfig),
     /// Persist the current profile as-is.
     WriteProfile,
     /// Reload profile from disk (discards unsaved live changes).

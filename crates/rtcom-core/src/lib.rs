@@ -44,5 +44,5 @@ pub use device::{SerialDevice, SerialPortDevice};
 pub use error::{Error, Result};
 pub use event::{Event, EventBus, DEFAULT_BUS_CAPACITY};
 pub use lock::UucpLock;
-pub use mapper::{LineEnding, LineEndingMapper, Mapper};
+pub use mapper::{LineEnding, LineEndingConfig, LineEndingMapper, Mapper};
 pub use session::Session;

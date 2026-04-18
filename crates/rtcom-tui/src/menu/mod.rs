@@ -7,10 +7,12 @@
 //! every child is a [`PlaceholderDialog`]; later tasks (T12+) replace
 //! them with real dialogs.
 
+pub mod line_endings;
 pub mod placeholder;
 pub mod root;
 pub mod serial_port;
 
+pub use line_endings::LineEndingsDialog;
 pub use placeholder::PlaceholderDialog;
 pub use root::RootMenu;
 pub use serial_port::SerialPortSetupDialog;

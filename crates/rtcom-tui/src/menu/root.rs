@@ -12,7 +12,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Paragraph, Widget},
 };
-use rtcom_core::SerialConfig;
+use rtcom_core::{LineEndingConfig, SerialConfig};
 
 use crate::{
     menu::{placeholder::PlaceholderDialog, serial_port::SerialPortSetupDialog},
@@ -35,6 +35,11 @@ pub struct RootMenu {
     /// Snapshot of the live [`SerialConfig`]; forwarded to
     /// [`SerialPortSetupDialog::new`] when the user drills in.
     initial_config: SerialConfig,
+    /// Snapshot of the live [`LineEndingConfig`]; GREEN commit
+    /// forwards it to `LineEndingsDialog::new` when the user drills
+    /// into the "Line endings" row.
+    #[allow(dead_code, reason = "GREEN commit wires this into activate()")]
+    initial_line_endings: LineEndingConfig,
 }
 
 const ITEMS: &[&str] = &[
@@ -57,14 +62,16 @@ const SEPARATORS_AFTER: &[usize] = &[2, 4];
 
 impl RootMenu {
     /// Construct a root menu with the cursor on the first item and
-    /// snapshotting `initial_config` for forwarding to sub-dialogs
-    /// (currently [`SerialPortSetupDialog`]).
+    /// snapshotting `initial_config` + `initial_line_endings` for
+    /// forwarding to sub-dialogs (currently [`SerialPortSetupDialog`]
+    /// and the GREEN-commit `LineEndingsDialog`).
     #[must_use]
-    pub const fn new(initial_config: SerialConfig) -> Self {
+    pub const fn new(initial_config: SerialConfig, initial_line_endings: LineEndingConfig) -> Self {
         Self {
             items: ITEMS,
             selected: 0,
             initial_config,
+            initial_line_endings,
         }
     }
 
@@ -185,7 +192,7 @@ mod tests {
     }
 
     fn menu() -> RootMenu {
-        RootMenu::new(SerialConfig::default())
+        RootMenu::new(SerialConfig::default(), LineEndingConfig::default())
     }
 
     #[test]
@@ -271,7 +278,19 @@ mod tests {
             baud_rate: 9600,
             ..SerialConfig::default()
         };
-        let m = RootMenu::new(cfg);
+        let m = RootMenu::new(cfg, LineEndingConfig::default());
         assert_eq!(m.selected(), 0);
+    }
+
+    #[test]
+    fn enter_on_line_endings_pushes_line_endings_dialog() {
+        let mut m = RootMenu::new(SerialConfig::default(), LineEndingConfig::default());
+        // cursor=0 is Serial port. Move to 1 (Line endings).
+        m.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        let out = m.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        match out {
+            DialogOutcome::Push(d) => assert_eq!(d.title(), "Line endings"),
+            _ => panic!("expected Push"),
+        }
     }
 }

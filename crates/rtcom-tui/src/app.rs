@@ -9,7 +9,7 @@ use ratatui::{
 };
 use rtcom_core::{
     command::{Command, CommandKeyParser, ParseOutput},
-    Event, EventBus, SerialConfig,
+    Event, EventBus, LineEndingConfig, SerialConfig,
 };
 use tui_term::widget::PseudoTerminal;
 
@@ -42,6 +42,12 @@ pub struct TuiApp {
     /// instances so sub-dialogs (starting with T12's
     /// [`crate::menu::SerialPortSetupDialog`]) can display live values.
     current_config: SerialConfig,
+    /// Current line-ending mapper configuration; seeded to
+    /// [`LineEndingConfig::default`] at construction and updated by
+    /// [`TuiApp::set_line_endings`]. Forwarded into new [`RootMenu`]
+    /// instances so the T13 [`crate::menu::LineEndingsDialog`] opens
+    /// with live values.
+    current_line_endings: LineEndingConfig,
 }
 
 impl TuiApp {
@@ -64,6 +70,7 @@ impl TuiApp {
             parser: CommandKeyParser::default(),
             modal_stack: ModalStack::new(),
             current_config: SerialConfig::default(),
+            current_line_endings: LineEndingConfig::default(),
         }
     }
 
@@ -74,6 +81,16 @@ impl TuiApp {
     /// this into `Event::ConfigChanged`).
     pub const fn set_serial_config(&mut self, cfg: SerialConfig) {
         self.current_config = cfg;
+    }
+
+    /// Update the cached [`LineEndingConfig`] that new [`RootMenu`]
+    /// pushes pass down to the T13
+    /// [`crate::menu::LineEndingsDialog`].
+    ///
+    /// Call this whenever the live session's mapper configuration
+    /// changes (T17 wires this into the `ApplyLineEndingsLive` path).
+    pub const fn set_line_endings(&mut self, le: LineEndingConfig) {
+        self.current_line_endings = le;
     }
 
     /// Whether the configuration menu is currently open.
@@ -159,8 +176,10 @@ impl TuiApp {
                 ParseOutput::Data(data_byte) => tx.push(data_byte),
                 ParseOutput::Command(Command::OpenMenu) => {
                     self.menu_open = true;
-                    self.modal_stack
-                        .push(Box::new(RootMenu::new(self.current_config)));
+                    self.modal_stack.push(Box::new(RootMenu::new(
+                        self.current_config,
+                        self.current_line_endings,
+                    )));
                     let _ = self.bus.publish(Event::MenuOpened);
                     return Dispatch::OpenedMenu;
                 }

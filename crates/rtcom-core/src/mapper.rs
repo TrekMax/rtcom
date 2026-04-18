@@ -36,6 +36,26 @@ pub enum LineEnding {
     DropLf,
 }
 
+/// The full set of line-ending mappers for a session's byte streams.
+///
+/// Holds one [`LineEnding`] rule per direction:
+///
+/// - `omap` — outbound (applied to bytes sent to the device)
+/// - `imap` — inbound (applied to bytes received from the device)
+/// - `emap` — echo map (applied to local echo display)
+///
+/// `Default` returns all three set to [`LineEnding::None`] — i.e. the
+/// transparent configuration that passes every byte through unchanged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct LineEndingConfig {
+    /// Outbound mapper — bytes typed by the user before they reach the device.
+    pub omap: LineEnding,
+    /// Inbound mapper — bytes received from the device before they reach the screen.
+    pub imap: LineEnding,
+    /// Echo mapper — applied to the local echo of outbound bytes when echo is on.
+    pub emap: LineEnding,
+}
+
 /// Generic byte-stream transformation.
 ///
 /// `&mut self` because some future mappers (e.g. one that normalises
@@ -177,5 +197,13 @@ mod tests {
         // The mapper must not touch CR or arbitrary bytes when the
         // active rule targets only LF.
         assert_eq!(run(LineEnding::AddCrToLf, b"\rabc\x1bxyz"), b"\rabc\x1bxyz");
+    }
+
+    #[test]
+    fn line_ending_config_default_all_none() {
+        let c = LineEndingConfig::default();
+        assert_eq!(c.omap, LineEnding::None);
+        assert_eq!(c.imap, LineEnding::None);
+        assert_eq!(c.emap, LineEnding::None);
     }
 }
