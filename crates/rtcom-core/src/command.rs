@@ -3,11 +3,15 @@
 //! Stub: only the public types are defined here. Behaviour is filled in
 //! by the next commit in the TDD cycle.
 
-/// One actionable command produced by [`CommandKeyParser`].
+use crate::config::SerialConfig;
+
+/// One actionable command produced by [`CommandKeyParser`] or published
+/// onto the bus by higher layers (e.g. the TUI).
 ///
-/// `Copy` because every variant carries only `Copy` data (currently a
-/// single `u32` for `SetBaud`). Passing by value is therefore cheap and
-/// matches how the dispatcher consumes the value via `match`.
+/// `Copy` because every variant carries only `Copy` data (currently
+/// `u32`, `bool`, or a [`SerialConfig`] — which is `Copy`). Passing by
+/// value is cheap and matches how the dispatcher consumes the value via
+/// `match`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Command {
     /// Show the help / command-key cheatsheet.
@@ -26,6 +30,20 @@ pub enum Command {
     SetBaud(u32),
     /// Open the TUI configuration menu.
     OpenMenu,
+    /// Atomically apply a full [`SerialConfig`] (baud + data / stop /
+    /// parity / flow) via [`Session::apply_config`](crate::Session::apply_config).
+    ///
+    /// Introduced in v0.2 task 17 so dialog-driven "apply live" flows
+    /// do not have to decompose their target config into individual
+    /// `Set*` commands.
+    ApplyConfig(SerialConfig),
+    /// Set the DTR output line to an absolute level (`true` asserted,
+    /// `false` deasserted). Unlike [`Command::ToggleDtr`] this does not
+    /// depend on the session's cached line state.
+    SetDtrAbs(bool),
+    /// Set the RTS output line to an absolute level. See
+    /// [`Command::SetDtrAbs`].
+    SetRtsAbs(bool),
 }
 
 /// What [`CommandKeyParser::feed`] produced for a single input byte.

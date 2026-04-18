@@ -227,7 +227,7 @@ impl<D: SerialDevice + 'static> Session<D> {
                             break;
                         }
                     }
-                    Ok(Event::Command(cmd)) => self.dispatch_command(cmd),
+                    Ok(Event::Command(cmd)) => self.dispatch_command(cmd).await,
                     // Lagged: we missed some events but can resume.
                     // Other event variants are not the loop's concern.
                     Ok(_) | Err(broadcast::error::RecvError::Lagged(_)) => {}
@@ -242,11 +242,13 @@ impl<D: SerialDevice + 'static> Session<D> {
     /// Apply a [`Command`] to the device and bus.
     ///
     /// Commands that mutate the device run synchronously here; success
-    /// emits [`Event::ConfigChanged`] (when applicable), failure emits
-    /// [`Event::Error`]. The caller (the `Session::run` loop) does not
-    /// need to await anything: every operation either completes
-    /// immediately or is fire-and-forget.
-    fn dispatch_command(&mut self, cmd: Command) {
+    /// emits [`Event::ConfigChanged`] (`ApplyConfig` / `SetBaud`) or
+    /// [`Event::ModemLinesChanged`] (line toggles / absolute sets),
+    /// failure emits [`Event::Error`]. The `async` signature exists so
+    /// the dispatcher can await [`Session::apply_config`] without
+    /// forking a task; the other arms are synchronous and perform no
+    /// awaits.
+    pub(crate) async fn dispatch_command(&mut self, cmd: Command) {
         match cmd {
             Command::Quit => self.cancel.cancel(),
             Command::Help => {
@@ -272,36 +274,23 @@ impl<D: SerialDevice + 'static> Session<D> {
                     self.bus.publish(Event::Error(Arc::new(err)));
                 }
             },
+            Command::ApplyConfig(cfg) => {
+                if let Err(err) = self.apply_config(cfg).await {
+                    self.bus.publish(Event::Error(Arc::new(err)));
+                }
+                // Success path: `apply_config` already published
+                // `ConfigChanged`.
+            }
             Command::ToggleDtr => {
                 let new_state = !self.dtr_asserted;
-                match self.device.set_dtr(new_state) {
-                    Ok(()) => {
-                        self.dtr_asserted = new_state;
-                        self.bus.publish(Event::SystemMessage(format!(
-                            "DTR: {}",
-                            if new_state { "asserted" } else { "deasserted" }
-                        )));
-                    }
-                    Err(err) => {
-                        self.bus.publish(Event::Error(Arc::new(err)));
-                    }
-                }
+                self.apply_dtr(new_state);
             }
             Command::ToggleRts => {
                 let new_state = !self.rts_asserted;
-                match self.device.set_rts(new_state) {
-                    Ok(()) => {
-                        self.rts_asserted = new_state;
-                        self.bus.publish(Event::SystemMessage(format!(
-                            "RTS: {}",
-                            if new_state { "asserted" } else { "deasserted" }
-                        )));
-                    }
-                    Err(err) => {
-                        self.bus.publish(Event::Error(Arc::new(err)));
-                    }
-                }
+                self.apply_rts(new_state);
             }
+            Command::SetDtrAbs(state) => self.apply_dtr(state),
+            Command::SetRtsAbs(state) => self.apply_rts(state),
             Command::SendBreak => match self.device.send_break(SEND_BREAK_DURATION) {
                 Ok(()) => {
                     self.bus.publish(Event::SystemMessage(format!(
@@ -319,6 +308,49 @@ impl<D: SerialDevice + 'static> Session<D> {
                 // broadcast the signal so late-bound listeners can
                 // observe it.
                 self.bus.publish(Event::MenuOpened);
+            }
+        }
+    }
+
+    /// Drive the DTR line to `new_state`, publishing a `SystemMessage`
+    /// and a [`Event::ModemLinesChanged`] on success, or
+    /// [`Event::Error`] on failure. Shared by `ToggleDtr` and
+    /// `SetDtrAbs` so both paths surface identical observable events.
+    fn apply_dtr(&mut self, new_state: bool) {
+        match self.device.set_dtr(new_state) {
+            Ok(()) => {
+                self.dtr_asserted = new_state;
+                self.bus.publish(Event::SystemMessage(format!(
+                    "DTR: {}",
+                    if new_state { "asserted" } else { "deasserted" }
+                )));
+                self.bus.publish(Event::ModemLinesChanged {
+                    dtr: self.dtr_asserted,
+                    rts: self.rts_asserted,
+                });
+            }
+            Err(err) => {
+                self.bus.publish(Event::Error(Arc::new(err)));
+            }
+        }
+    }
+
+    /// RTS counterpart to [`Self::apply_dtr`].
+    fn apply_rts(&mut self, new_state: bool) {
+        match self.device.set_rts(new_state) {
+            Ok(()) => {
+                self.rts_asserted = new_state;
+                self.bus.publish(Event::SystemMessage(format!(
+                    "RTS: {}",
+                    if new_state { "asserted" } else { "deasserted" }
+                )));
+                self.bus.publish(Event::ModemLinesChanged {
+                    dtr: self.dtr_asserted,
+                    rts: self.rts_asserted,
+                });
+            }
+            Err(err) => {
+                self.bus.publish(Event::Error(Arc::new(err)));
             }
         }
     }
@@ -409,6 +441,7 @@ mod tests {
     use tokio::sync::broadcast::error::TryRecvError;
 
     use super::{Event, Result, SerialDevice, Session};
+    use crate::command::Command;
     use crate::config::{DataBits, FlowControl, ModemStatus, Parity, SerialConfig, StopBits};
     use crate::error::Error;
 
@@ -599,6 +632,122 @@ mod tests {
             Err(TryRecvError::Empty) => {}
             Ok(Event::ConfigChanged(_)) => panic!("unexpected ConfigChanged after rollback"),
             other => panic!("unexpected bus state: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn apply_config_command_dispatches_through_session() {
+        let device = MockDevice::new(SerialConfig::default());
+        let mut session = Session::new(device);
+        let mut rx = session.bus().subscribe();
+
+        let target = SerialConfig {
+            baud_rate: 9600,
+            ..SerialConfig::default()
+        };
+        session.dispatch_command(Command::ApplyConfig(target)).await;
+
+        let ev = rx.try_recv().expect("ConfigChanged should be on the bus");
+        match ev {
+            Event::ConfigChanged(cfg) => assert_eq!(cfg.baud_rate, 9600),
+            other => panic!("expected ConfigChanged, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn apply_config_command_on_failure_publishes_error() {
+        let mut device = MockDevice::new(SerialConfig::default());
+        device.fail_baud = true;
+        let mut session = Session::new(device);
+        let mut rx = session.bus().subscribe();
+
+        let target = SerialConfig {
+            baud_rate: 9600,
+            ..SerialConfig::default()
+        };
+        session.dispatch_command(Command::ApplyConfig(target)).await;
+
+        match rx.try_recv() {
+            Ok(Event::Error(_)) => {}
+            other => panic!("expected Error, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn set_dtr_abs_publishes_modem_lines_changed() {
+        let device = MockDevice::new(SerialConfig::default());
+        let mut session = Session::new(device);
+        let mut rx = session.bus().subscribe();
+
+        session.dispatch_command(Command::SetDtrAbs(true)).await;
+
+        // Expected sequence: SystemMessage, ModemLinesChanged.
+        match rx.recv().await.unwrap() {
+            Event::SystemMessage(_) => {}
+            other => panic!("expected SystemMessage, got {other:?}"),
+        }
+        match rx.recv().await.unwrap() {
+            Event::ModemLinesChanged { dtr, rts } => {
+                assert!(dtr);
+                // `rts_asserted` defaults to `true` in Session::new.
+                assert!(rts);
+            }
+            other => panic!("expected ModemLinesChanged, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn set_rts_abs_publishes_modem_lines_changed() {
+        let device = MockDevice::new(SerialConfig::default());
+        let mut session = Session::new(device);
+        let mut rx = session.bus().subscribe();
+
+        session.dispatch_command(Command::SetRtsAbs(false)).await;
+
+        let _ = rx.recv().await; // SystemMessage
+        match rx.recv().await.unwrap() {
+            Event::ModemLinesChanged { dtr, rts } => {
+                assert!(dtr);
+                assert!(!rts);
+            }
+            other => panic!("expected ModemLinesChanged, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn toggle_dtr_now_also_publishes_modem_lines_changed() {
+        let device = MockDevice::new(SerialConfig::default());
+        let mut session = Session::new(device);
+        let mut rx = session.bus().subscribe();
+
+        session.dispatch_command(Command::ToggleDtr).await;
+
+        let _ = rx.recv().await; // SystemMessage (existing pre-T17 behaviour)
+        match rx.recv().await.unwrap() {
+            Event::ModemLinesChanged { dtr, rts } => {
+                // Toggle from the default (true) lowers DTR.
+                assert!(!dtr);
+                assert!(rts);
+            }
+            other => panic!("expected ModemLinesChanged, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn toggle_rts_now_also_publishes_modem_lines_changed() {
+        let device = MockDevice::new(SerialConfig::default());
+        let mut session = Session::new(device);
+        let mut rx = session.bus().subscribe();
+
+        session.dispatch_command(Command::ToggleRts).await;
+
+        let _ = rx.recv().await; // SystemMessage
+        match rx.recv().await.unwrap() {
+            Event::ModemLinesChanged { dtr, rts } => {
+                assert!(dtr);
+                assert!(!rts);
+            }
+            other => panic!("expected ModemLinesChanged, got {other:?}"),
         }
     }
 

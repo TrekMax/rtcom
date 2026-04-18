@@ -83,6 +83,21 @@ pub enum Event {
         /// Source error, shareable across the broadcast fan-out.
         error: Arc<Error>,
     },
+    /// DTR / RTS output-line state changed. Published by the session
+    /// after a successful
+    /// [`ToggleDtr`](crate::command::Command::ToggleDtr) /
+    /// [`ToggleRts`](crate::command::Command::ToggleRts) /
+    /// [`SetDtrAbs`](crate::command::Command::SetDtrAbs) /
+    /// [`SetRtsAbs`](crate::command::Command::SetRtsAbs) dispatch so
+    /// subscribers (notably the TUI) can refresh their cached
+    /// [`ModemLineSnapshot`](crate::config::ModemLineSnapshot) without
+    /// re-reading the device.
+    ModemLinesChanged {
+        /// Current DTR state after the change.
+        dtr: bool,
+        /// Current RTS state after the change.
+        rts: bool,
+    },
 }
 
 /// Multi-producer, multi-consumer event hub.
@@ -210,6 +225,21 @@ mod tests {
         match ev {
             Event::ProfileSaved { path } => {
                 assert_eq!(path, std::path::PathBuf::from("/tmp/x.toml"));
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn event_modem_lines_changed_carries_both_booleans() {
+        let ev = Event::ModemLinesChanged {
+            dtr: true,
+            rts: false,
+        };
+        match ev {
+            Event::ModemLinesChanged { dtr, rts } => {
+                assert!(dtr);
+                assert!(!rts);
             }
             _ => panic!("wrong variant"),
         }
