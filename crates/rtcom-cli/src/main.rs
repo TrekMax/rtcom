@@ -185,6 +185,7 @@ async fn async_main(
         rts: initial_rts,
     });
     app.set_modal_style(profile_modal_style(&profile));
+    app.set_wheel_scroll_lines(profile.screen.wheel_scroll_lines);
     app.set_cli_overrides(cli_override_labels(&cli));
 
     // Spawn the session loop. A clone of the cancel token stays here

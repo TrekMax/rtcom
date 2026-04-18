@@ -42,7 +42,7 @@ use crate::{
         line_ending_config_to_section, line_endings_from_profile, serial_config_to_section,
         serial_section_to_config,
     },
-    terminal::{AltScreenGuard, RawModeGuard},
+    terminal::{AltScreenGuard, MouseCaptureGuard, RawModeGuard},
     toast::ToastLevel,
 };
 
@@ -87,11 +87,16 @@ pub async fn run(
     profile_path: Option<PathBuf>,
     mut profile: Profile,
 ) -> Result<()> {
-    // RAII: enter raw mode + alt screen. Both restore on drop, even
-    // if the terminal setup below or the loop body returns Err — the
-    // guards sit on the stack and unwind through every error path.
+    // RAII: enter raw mode + alt screen + mouse capture. All three
+    // restore on drop, even if the terminal setup below or the loop
+    // body returns Err — the guards sit on the stack and unwind
+    // through every error path. Drop order is `_mouse` → `_alt` →
+    // `_raw`, the reverse of construction, so mouse capture is
+    // released before we leave the alternate screen (matching the
+    // crossterm recipe for setup/teardown symmetry).
     let _raw = RawModeGuard::enter()?;
     let _alt = AltScreenGuard::enter()?;
+    let _mouse = MouseCaptureGuard::enable()?;
 
     let backend = CrosstermBackend::new(io::stdout());
     let mut terminal = Terminal::new(backend).context("build ratatui terminal")?;
@@ -142,8 +147,14 @@ pub async fn run(
                         // SerialPane::resize takes (rows, cols).
                         app.serial_pane_mut().resize(rows, cols);
                     }
+                    Some(Ok(CtEvent::Mouse(m_ev))) => {
+                        // Wheel events scroll the serial pane; click /
+                        // drag / move are ignored in v0.2 (native
+                        // selection lands in v0.2.1).
+                        let _ = app.handle_mouse(m_ev);
+                    }
                     Some(Ok(_)) => {
-                        // FocusGained / FocusLost / Mouse / Paste: ignore.
+                        // FocusGained / FocusLost / Paste: ignore.
                     }
                     Some(Err(err)) => {
                         tracing::error!(%err, "terminal event stream error");

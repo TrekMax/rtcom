@@ -101,6 +101,13 @@ pub struct ScreenSection {
     pub modal_style: ModalStyle,
     /// Number of scrollback rows retained in the TUI buffer.
     pub scrollback_rows: usize,
+    /// Lines scrolled per mouse-wheel notch in the serial pane.
+    ///
+    /// Values less than 1 are treated as 1 at runtime so the wheel
+    /// always has a visible effect. v0.2 has no menu control for this
+    /// — hand-edit the TOML to change it; a menu-editable control is
+    /// deferred to v0.2.1.
+    pub wheel_scroll_lines: u16,
 }
 
 impl Default for ScreenSection {
@@ -108,6 +115,7 @@ impl Default for ScreenSection {
         Self {
             modal_style: ModalStyle::Overlay,
             scrollback_rows: 10_000,
+            wheel_scroll_lines: 3,
         }
     }
 }
@@ -136,6 +144,22 @@ mod tests {
         assert_eq!(p.serial.data_bits, 8);
         assert_eq!(p.screen.modal_style, ModalStyle::Overlay);
         assert_eq!(p.screen.scrollback_rows, 10_000);
+        assert_eq!(p.screen.wheel_scroll_lines, 3);
+    }
+
+    #[test]
+    fn profile_partial_screen_section_keeps_wheel_default() {
+        // Simulate an existing profile written before T24 — the file
+        // has modal_style but no wheel_scroll_lines. Serde's
+        // `#[serde(default)]` must fall back to the section default
+        // without failing to parse.
+        let partial = r#"
+            [screen]
+            modal_style = "fullscreen"
+        "#;
+        let parsed: Profile = toml::from_str(partial).expect("parse");
+        assert_eq!(parsed.screen.modal_style, ModalStyle::Fullscreen);
+        assert_eq!(parsed.screen.wheel_scroll_lines, 3);
     }
 
     #[test]

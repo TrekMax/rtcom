@@ -68,6 +68,64 @@ impl SerialPane {
     pub const fn scrollback_rows(&self) -> usize {
         self.scrollback_rows
     }
+
+    /// Current scrollback offset from the live tail (0 = live).
+    ///
+    /// A non-zero value means the rendered view is above the live
+    /// tail by that many rows; new bytes continue to accumulate in
+    /// the buffer but do not scroll the view until the user scrolls
+    /// back down via [`SerialPane::scroll_down`] /
+    /// [`SerialPane::scroll_to_bottom`].
+    #[must_use]
+    pub fn scrollback_offset(&self) -> usize {
+        self.parser.screen().scrollback()
+    }
+
+    /// True when the view is above the live tail.
+    ///
+    /// Consumers (e.g. the top-bar renderer) use this as the "should
+    /// I show the `[SCROLL ↑N]` indicator?" predicate.
+    #[must_use]
+    pub fn is_scrolled(&self) -> bool {
+        self.scrollback_offset() > 0
+    }
+
+    /// Scroll up by `lines` (toward older content).
+    ///
+    /// Clamped to the configured scrollback capacity so extreme input
+    /// values (e.g. `usize::MAX`) do not overflow. vt100 also clamps
+    /// internally to the *actual* amount of scrollback accumulated so
+    /// far, so requesting more than exists simply lands at "top of
+    /// history".
+    pub fn scroll_up(&mut self, lines: usize) {
+        let target = self
+            .scrollback_offset()
+            .saturating_add(lines)
+            .min(self.scrollback_rows);
+        self.parser.set_scrollback(target);
+    }
+
+    /// Scroll down by `lines` (toward newer content / the live tail).
+    ///
+    /// Saturates at 0 (live tail); calling with a huge value is
+    /// equivalent to [`SerialPane::scroll_to_bottom`].
+    pub fn scroll_down(&mut self, lines: usize) {
+        let target = self.scrollback_offset().saturating_sub(lines);
+        self.parser.set_scrollback(target);
+    }
+
+    /// Jump to the oldest row retained in the scrollback buffer.
+    ///
+    /// Requests the configured scrollback capacity; vt100 internally
+    /// clamps to however much history actually exists.
+    pub fn scroll_to_top(&mut self) {
+        self.parser.set_scrollback(self.scrollback_rows);
+    }
+
+    /// Jump back to the live tail (`scrollback_offset == 0`).
+    pub fn scroll_to_bottom(&mut self) {
+        self.parser.set_scrollback(0);
+    }
 }
 
 #[cfg(test)]
@@ -106,6 +164,82 @@ mod tests {
         // Just ensure construction with custom scrollback succeeds.
         // Actual scrollback semantics are exercised by vt100 itself.
         assert_eq!(pane.scrollback_rows(), 500);
+    }
+
+    #[test]
+    fn scroll_up_increments_offset() {
+        let mut pane = SerialPane::new(24, 80);
+        // Need enough content to build scrollback — ingest > 24 rows.
+        for i in 0..40 {
+            pane.ingest(format!("row {i}\r\n").as_bytes());
+        }
+        assert_eq!(pane.scrollback_offset(), 0);
+        assert!(!pane.is_scrolled());
+        pane.scroll_up(5);
+        assert_eq!(pane.scrollback_offset(), 5);
+        assert!(pane.is_scrolled());
+    }
+
+    #[test]
+    fn scroll_down_decrements_offset() {
+        let mut pane = SerialPane::new(24, 80);
+        for i in 0..40 {
+            pane.ingest(format!("row {i}\r\n").as_bytes());
+        }
+        pane.scroll_up(10);
+        pane.scroll_down(4);
+        assert_eq!(pane.scrollback_offset(), 6);
+    }
+
+    #[test]
+    fn scroll_to_bottom_resets_offset() {
+        let mut pane = SerialPane::new(24, 80);
+        for i in 0..40 {
+            pane.ingest(format!("row {i}\r\n").as_bytes());
+        }
+        pane.scroll_up(15);
+        assert!(pane.is_scrolled());
+        pane.scroll_to_bottom();
+        assert_eq!(pane.scrollback_offset(), 0);
+        assert!(!pane.is_scrolled());
+    }
+
+    #[test]
+    fn scroll_up_clamps_to_scrollback_capacity() {
+        let mut pane = SerialPane::new(24, 80);
+        for _ in 0..5 {
+            pane.ingest(b"x\r\n");
+        }
+        // Request a massive scroll — the API must not overflow and
+        // must not exceed the configured scrollback capacity.
+        pane.scroll_up(usize::MAX / 2);
+        assert!(pane.scrollback_offset() <= SerialPane::DEFAULT_SCROLLBACK_ROWS);
+    }
+
+    #[test]
+    fn scroll_down_saturates_at_zero() {
+        let mut pane = SerialPane::new(24, 80);
+        for i in 0..40 {
+            pane.ingest(format!("row {i}\r\n").as_bytes());
+        }
+        // Not scrolled: scroll_down from 0 must stay at 0.
+        pane.scroll_down(100);
+        assert_eq!(pane.scrollback_offset(), 0);
+    }
+
+    #[test]
+    fn scroll_to_top_jumps_to_oldest() {
+        let mut pane = SerialPane::new(24, 80);
+        for i in 0..40 {
+            pane.ingest(format!("row {i}\r\n").as_bytes());
+        }
+        pane.scroll_to_top();
+        // vt100 clamps to the actual scrollback length, which is at
+        // most (total_rows - visible_rows) = 40 - 24 = 16. We only
+        // assert that we moved up and that we haven't exceeded the
+        // configured capacity.
+        assert!(pane.is_scrolled());
+        assert!(pane.scrollback_offset() <= SerialPane::DEFAULT_SCROLLBACK_ROWS);
     }
 
     #[test]

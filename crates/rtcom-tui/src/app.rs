@@ -1,9 +1,9 @@
 //! Top-level TUI application object.
 
-use crossterm::event::KeyEvent;
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
 use ratatui::{
     layout::Rect,
-    style::{Modifier, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::Paragraph,
     Frame,
@@ -78,6 +78,16 @@ pub struct TuiApp {
     /// a hint explaining why the on-screen values may not match the
     /// saved profile.
     current_cli_overrides: Vec<&'static str>,
+    /// Lines scrolled per mouse-wheel notch in the serial pane.
+    /// Seeded to 3 and overridden from the profile by the binary's
+    /// `main` via [`TuiApp::set_wheel_scroll_lines`]. Always at least
+    /// 1 so the wheel never becomes a no-op.
+    wheel_scroll_lines: u16,
+    /// Height in rows of the body area at the last render. Used by
+    /// [`TuiApp::handle_key`] to compute half-screen page scrolls.
+    /// Seeded to 24 so the first Shift+PageUp / Shift+PageDown press
+    /// before any render still has a sensible denominator.
+    body_rows: u16,
 }
 
 impl TuiApp {
@@ -105,7 +115,20 @@ impl TuiApp {
             current_modal_style: ModalStyle::default(),
             toasts: ToastQueue::new(),
             current_cli_overrides: Vec::new(),
+            wheel_scroll_lines: 3,
+            body_rows: 24,
         }
+    }
+
+    /// Override the mouse-wheel scroll speed (lines per notch).
+    ///
+    /// Values less than 1 are clamped to 1 so the wheel never turns
+    /// into a no-op — a wheel event that moves nothing visibly
+    /// suggests rtcom is broken even when the underlying config is
+    /// "intentionally disabled". Users who want to pin the view can
+    /// simply not scroll.
+    pub fn set_wheel_scroll_lines(&mut self, n: u16) {
+        self.wheel_scroll_lines = n.max(1);
     }
 
     /// Record which CLI flags overrode a profile value at startup.
@@ -256,6 +279,40 @@ impl TuiApp {
             };
         }
 
+        // Scrollback navigation: Shift+PageUp/Down, Shift+Up/Down,
+        // Shift+Home/End. Intercepted before CommandKeyParser so they
+        // never reach the wire and never fight device input.
+        if key.modifiers.contains(KeyModifiers::SHIFT) {
+            let half_screen = (usize::from(self.body_rows) / 2).max(1);
+            match key.code {
+                KeyCode::PageUp => {
+                    self.serial_pane.scroll_up(half_screen);
+                    return Dispatch::Noop;
+                }
+                KeyCode::PageDown => {
+                    self.serial_pane.scroll_down(half_screen);
+                    return Dispatch::Noop;
+                }
+                KeyCode::Up => {
+                    self.serial_pane.scroll_up(1);
+                    return Dispatch::Noop;
+                }
+                KeyCode::Down => {
+                    self.serial_pane.scroll_down(1);
+                    return Dispatch::Noop;
+                }
+                KeyCode::Home => {
+                    self.serial_pane.scroll_to_top();
+                    return Dispatch::Noop;
+                }
+                KeyCode::End => {
+                    self.serial_pane.scroll_to_bottom();
+                    return Dispatch::Noop;
+                }
+                _ => {}
+            }
+        }
+
         let bytes = crate::input::key_to_bytes(key);
         if bytes.is_empty() {
             return Dispatch::Noop;
@@ -296,6 +353,37 @@ impl TuiApp {
         }
     }
 
+    /// Route a mouse event.
+    ///
+    /// v0.2 handles only wheel scroll: [`MouseEventKind::ScrollUp`] and
+    /// [`MouseEventKind::ScrollDown`] move the serial pane's scrollback
+    /// view by [`TuiApp::set_wheel_scroll_lines`] lines per notch.
+    /// Click / drag / move events are ignored until v0.2.1 lands
+    /// selection + copy. Menu-open mouse events are also ignored — the
+    /// menu is keyboard-only for now.
+    pub fn handle_mouse(&mut self, ev: MouseEvent) -> Dispatch {
+        if self.menu_open {
+            // Menus are keyboard-driven in v0.2; mouse events into a
+            // modal dialog are dropped. v0.2.1 may grow menu mouse
+            // support.
+            return Dispatch::Noop;
+        }
+        match ev.kind {
+            MouseEventKind::ScrollUp => {
+                self.serial_pane
+                    .scroll_up(usize::from(self.wheel_scroll_lines));
+            }
+            MouseEventKind::ScrollDown => {
+                self.serial_pane
+                    .scroll_down(usize::from(self.wheel_scroll_lines));
+            }
+            // Drag / Click / Move / ScrollLeft / ScrollRight: deferred
+            // to v0.2.1 (native selection + copy).
+            _ => {}
+        }
+        Dispatch::Noop
+    }
+
     /// Render the main screen into `f`.
     ///
     /// Layout: 1-row top bar ("rtcom {version} | {device} | {config}"),
@@ -324,10 +412,14 @@ impl TuiApp {
         if body.height > 0 && body.width > 0 {
             self.serial_pane.resize(body.height, body.width);
         }
+        // Cache the body height so `handle_key` can compute
+        // half-screen Shift+PageUp / PageDown scrolls without having a
+        // render frame on hand.
+        self.body_rows = body.height;
 
         // Top bar.
         let version = env!("CARGO_PKG_VERSION");
-        let top_line = Line::from(vec![
+        let mut top_spans = vec![
             Span::styled(
                 format!(" rtcom {version} "),
                 Style::default().add_modifier(Modifier::REVERSED),
@@ -336,8 +428,19 @@ impl TuiApp {
             Span::raw(self.device_path.clone()),
             Span::raw("  "),
             Span::raw(self.config_summary.clone()),
-        ]);
-        f.render_widget(Paragraph::new(top_line), top);
+        ];
+        // Scrollback indicator: only rendered when the view is above
+        // the live tail so the top bar stays clean in the common case.
+        if self.serial_pane.is_scrolled() {
+            top_spans.push(Span::styled(
+                format!(
+                    "  [SCROLL \u{2191}{}]",
+                    self.serial_pane.scrollback_offset()
+                ),
+                Style::default().fg(Color::Yellow),
+            ));
+        }
+        f.render_widget(Paragraph::new(Line::from(top_spans)), top);
 
         // Body: whether to draw the live serial pane, and whether to
         // dim it, depends on the current modal style and menu state.
@@ -672,6 +775,199 @@ mod tests {
         assert!(
             !style.add_modifier.contains(Modifier::DIM),
             "expected no DIM on body cell with Overlay style, got {style:?}"
+        );
+    }
+
+    // ----- T24: scrollback keyboard + mouse handling -----
+
+    fn seed_pane_with_rows(app: &mut TuiApp, rows: usize) {
+        for i in 0..rows {
+            app.serial_pane_mut()
+                .ingest(format!("row {i}\r\n").as_bytes());
+        }
+    }
+
+    #[test]
+    fn shift_page_up_scrolls_up_half_screen() {
+        let bus = EventBus::new(64);
+        let mut app = TuiApp::new(bus);
+        // Render once so body_rows is populated (22 for 80x24 main chrome).
+        let _ = render_app(&mut app, 80, 24);
+        seed_pane_with_rows(&mut app, 40);
+        let out = app.handle_key(key(KeyCode::PageUp, KeyModifiers::SHIFT));
+        assert!(matches!(out, Dispatch::Noop));
+        // body.height == 22, half == 11.
+        assert_eq!(app.serial_pane.scrollback_offset(), 11);
+    }
+
+    #[test]
+    fn shift_page_down_scrolls_down_half_screen() {
+        let bus = EventBus::new(64);
+        let mut app = TuiApp::new(bus);
+        let _ = render_app(&mut app, 80, 24);
+        seed_pane_with_rows(&mut app, 200); // plenty of scrollback
+        app.serial_pane_mut().scroll_up(50);
+        let before = app.serial_pane.scrollback_offset();
+        let out = app.handle_key(key(KeyCode::PageDown, KeyModifiers::SHIFT));
+        assert!(matches!(out, Dispatch::Noop));
+        // body.height on 80x24 = 22, half = 11. Exact arithmetic only
+        // works when scroll_up didn't clamp against scrollback length,
+        // which is why we seed 200 rows up-front.
+        assert_eq!(app.serial_pane.scrollback_offset(), before - 11);
+    }
+
+    #[test]
+    fn shift_up_scrolls_one_line() {
+        let bus = EventBus::new(64);
+        let mut app = TuiApp::new(bus);
+        seed_pane_with_rows(&mut app, 40);
+        let _ = app.handle_key(key(KeyCode::Up, KeyModifiers::SHIFT));
+        assert_eq!(app.serial_pane.scrollback_offset(), 1);
+        let _ = app.handle_key(key(KeyCode::Up, KeyModifiers::SHIFT));
+        assert_eq!(app.serial_pane.scrollback_offset(), 2);
+    }
+
+    #[test]
+    fn shift_down_scrolls_back_one_line() {
+        let bus = EventBus::new(64);
+        let mut app = TuiApp::new(bus);
+        seed_pane_with_rows(&mut app, 40);
+        app.serial_pane_mut().scroll_up(5);
+        let _ = app.handle_key(key(KeyCode::Down, KeyModifiers::SHIFT));
+        assert_eq!(app.serial_pane.scrollback_offset(), 4);
+    }
+
+    #[test]
+    fn shift_home_and_end_jump_to_top_and_bottom() {
+        let bus = EventBus::new(64);
+        let mut app = TuiApp::new(bus);
+        seed_pane_with_rows(&mut app, 40);
+        let _ = app.handle_key(key(KeyCode::Home, KeyModifiers::SHIFT));
+        assert!(app.serial_pane.is_scrolled());
+        let _ = app.handle_key(key(KeyCode::End, KeyModifiers::SHIFT));
+        assert_eq!(app.serial_pane.scrollback_offset(), 0);
+    }
+
+    #[test]
+    fn plain_page_up_without_shift_does_not_scroll() {
+        let bus = EventBus::new(64);
+        let mut app = TuiApp::new(bus);
+        seed_pane_with_rows(&mut app, 40);
+        // PageUp without Shift has no wire encoding in `key_to_bytes`,
+        // so it's Noop, but must not affect the scrollback offset.
+        let _ = app.handle_key(key(KeyCode::PageUp, KeyModifiers::NONE));
+        assert_eq!(app.serial_pane.scrollback_offset(), 0);
+    }
+
+    #[test]
+    fn shift_scroll_keys_are_swallowed_when_menu_open() {
+        let bus = EventBus::new(64);
+        let mut app = TuiApp::new(bus);
+        seed_pane_with_rows(&mut app, 40);
+        // Open the menu first.
+        let _ = app.handle_key(key(KeyCode::Char('a'), KeyModifiers::CONTROL));
+        let _ = app.handle_key(key(KeyCode::Char('m'), KeyModifiers::NONE));
+        assert!(app.is_menu_open());
+        // Shift+PageUp while the menu is open: MUST NOT scroll the
+        // serial pane — the menu-open branch runs first.
+        let before = app.serial_pane.scrollback_offset();
+        let _ = app.handle_key(key(KeyCode::PageUp, KeyModifiers::SHIFT));
+        assert_eq!(app.serial_pane.scrollback_offset(), before);
+    }
+
+    const fn mouse(kind: MouseEventKind) -> MouseEvent {
+        MouseEvent {
+            kind,
+            column: 10,
+            row: 10,
+            modifiers: KeyModifiers::NONE,
+        }
+    }
+
+    #[test]
+    fn mouse_wheel_up_scrolls_by_wheel_scroll_lines() {
+        let bus = EventBus::new(64);
+        let mut app = TuiApp::new(bus);
+        seed_pane_with_rows(&mut app, 40);
+        app.set_wheel_scroll_lines(5);
+        let _ = app.handle_mouse(mouse(MouseEventKind::ScrollUp));
+        assert_eq!(app.serial_pane.scrollback_offset(), 5);
+        let _ = app.handle_mouse(mouse(MouseEventKind::ScrollUp));
+        assert_eq!(app.serial_pane.scrollback_offset(), 10);
+    }
+
+    #[test]
+    fn mouse_wheel_down_scrolls_back() {
+        let bus = EventBus::new(64);
+        let mut app = TuiApp::new(bus);
+        seed_pane_with_rows(&mut app, 40);
+        app.set_wheel_scroll_lines(3);
+        app.serial_pane_mut().scroll_up(10);
+        let _ = app.handle_mouse(mouse(MouseEventKind::ScrollDown));
+        assert_eq!(app.serial_pane.scrollback_offset(), 7);
+    }
+
+    #[test]
+    fn mouse_click_does_not_scroll() {
+        let bus = EventBus::new(64);
+        let mut app = TuiApp::new(bus);
+        seed_pane_with_rows(&mut app, 40);
+        let _ = app.handle_mouse(mouse(MouseEventKind::Down(
+            crossterm::event::MouseButton::Left,
+        )));
+        assert_eq!(app.serial_pane.scrollback_offset(), 0);
+    }
+
+    #[test]
+    fn mouse_wheel_ignored_when_menu_open() {
+        let bus = EventBus::new(64);
+        let mut app = TuiApp::new(bus);
+        seed_pane_with_rows(&mut app, 40);
+        let _ = app.handle_key(key(KeyCode::Char('a'), KeyModifiers::CONTROL));
+        let _ = app.handle_key(key(KeyCode::Char('m'), KeyModifiers::NONE));
+        assert!(app.is_menu_open());
+        let _ = app.handle_mouse(mouse(MouseEventKind::ScrollUp));
+        assert_eq!(app.serial_pane.scrollback_offset(), 0);
+    }
+
+    #[test]
+    fn set_wheel_scroll_lines_clamps_zero_to_one() {
+        let bus = EventBus::new(64);
+        let mut app = TuiApp::new(bus);
+        app.set_wheel_scroll_lines(0);
+        seed_pane_with_rows(&mut app, 40);
+        let _ = app.handle_mouse(mouse(MouseEventKind::ScrollUp));
+        // Wheel must still move at least one line — 0 is clamped to 1.
+        assert_eq!(app.serial_pane.scrollback_offset(), 1);
+    }
+
+    #[test]
+    fn top_bar_shows_scroll_indicator_when_scrolled() {
+        let bus = EventBus::new(64);
+        let mut app = TuiApp::new(bus);
+        app.set_device_summary("/dev/ttyUSB0", "115200 8N1 none");
+        seed_pane_with_rows(&mut app, 40);
+        app.serial_pane_mut().scroll_up(7);
+        let terminal = render_app(&mut app, 80, 24);
+        let rendered = format!("{}", terminal.backend());
+        assert!(
+            rendered.contains("[SCROLL \u{2191}7]"),
+            "expected '[SCROLL ↑7]' in top bar, got:\n{rendered}"
+        );
+    }
+
+    #[test]
+    fn top_bar_hides_scroll_indicator_when_live() {
+        let bus = EventBus::new(64);
+        let mut app = TuiApp::new(bus);
+        app.set_device_summary("/dev/ttyUSB0", "115200 8N1 none");
+        seed_pane_with_rows(&mut app, 40);
+        // Not scrolled; indicator must not appear.
+        let terminal = render_app(&mut app, 80, 24);
+        let rendered = format!("{}", terminal.backend());
+        assert!(
+            !rendered.contains("[SCROLL"),
+            "unexpected scroll indicator in top bar:\n{rendered}"
         );
     }
 
