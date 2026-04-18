@@ -18,7 +18,7 @@ pub enum Command {
     Help,
     /// Quit the session.
     Quit,
-    /// Print the current [`SerialConfig`](crate::SerialConfig).
+    /// Print the current [`SerialConfig`].
     ShowConfig,
     /// Toggle the DTR output line.
     ToggleDtr,
