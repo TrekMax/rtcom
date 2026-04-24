@@ -15,7 +15,7 @@ tokio = { version = "1", features = ["full"] }
 serialport = "4"
 tokio-serial = "5.4"
 tokio-util = { version = "0.7", features = ["rt"] }
-nix = { version = "0.29", default-features = false, features = ["signal"] }
+nix = { version = "0.31", default-features = false, features = ["signal"] }
 tempfile = "3"
 assert_cmd = "2"
 predicates = "3"
