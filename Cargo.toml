@@ -20,7 +20,7 @@ tempfile = "3"
 assert_cmd = "2"
 predicates = "3"
 clap = { version = "4.5", features = ["derive", "env"] }
-crossterm = { version = "0.28", features = ["event-stream"] }
+crossterm = { version = "0.29", features = ["event-stream"] }
 ratatui = "0.30"
 vt100 = "0.16"
 tui-term = "0.3"
